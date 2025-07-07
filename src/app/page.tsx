@@ -11,6 +11,7 @@ import {
   ThumbsDown,
   ChevronRight,
   Volume2,
+  SwitchCamera,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -152,57 +153,49 @@ export default function CulinaryCanvasPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState<string>("");
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
 
 
   const { toast } = useToast();
 
   useEffect(() => {
-    let stream: MediaStream;
+    let stream: MediaStream | null = null;
 
-    const startWebcam = async () => {
+    const setupWebcam = async () => {
       try {
-        // If we don't have a selected camera yet, we need to find one.
-        if (!selectedCamera) {
-          // Get permission first, then close the stream. We just need it for permissions.
-          const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          tempStream.getTracks().forEach(track => track.stop());
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setVideoDevices(videoInputs);
 
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-          if (videoDevices.length > 0) {
-            const externalCamera = videoDevices.find(d => 
+        let cameraToUse = selectedCamera;
+        if (!cameraToUse || !videoInputs.find(d => d.deviceId === cameraToUse)) {
+            const externalCamera = videoInputs.find(d => 
               d.label.toLowerCase().includes('usb') || 
               (!d.label.toLowerCase().includes('built-in') && 
                !d.label.toLowerCase().includes('facetime') && 
                !d.label.toLowerCase().includes('integrated'))
             );
-            
-            // This will trigger a re-render and the effect will run again with the selected camera.
-            if (externalCamera) {
-              setSelectedCamera(externalCamera.deviceId);
-            } else {
-              setSelectedCamera(videoDevices[0].deviceId);
+            cameraToUse = externalCamera?.deviceId || videoInputs[0]?.deviceId;
+            if (cameraToUse) {
+                setSelectedCamera(cameraToUse);
             }
-            return; // Exit and let the effect re-run.
-          }
         }
         
-        // If we have a selectedCamera, get the stream.
-        if (selectedCamera) {
+        if (cameraToUse) {
             const constraints: MediaStreamConstraints = {
-                video: { deviceId: { exact: selectedCamera } },
+                video: { deviceId: { exact: cameraToUse } },
             };
             stream = await navigator.mediaDevices.getUserMedia(constraints);
             if (webcamRef.current) {
                 webcamRef.current.srcObject = stream;
             }
-        } else {
-            // Fallback if no camera was selected (e.g., no devices found)
+        } else if (videoInputs.length > 0) {
             stream = await navigator.mediaDevices.getUserMedia({ video: true });
             if (webcamRef.current) {
                 webcamRef.current.srcObject = stream;
             }
+        } else {
+             throw new Error("No video input devices found.");
         }
 
       } catch (err) {
@@ -210,30 +203,39 @@ export default function CulinaryCanvasPage() {
         toast({
           variant: "destructive",
           title: "Webcam Error",
-          description: "Could not access webcam. Check browser permissions.",
+          description: "Could not access webcam. Check browser permissions or if a camera is connected.",
         });
         setIsWebcamOn(false);
       }
     };
 
     if (isWebcamOn) {
-      startWebcam();
+      setupWebcam();
     } else {
-        // If webcam is turned off, clear the selected camera so it's re-detected next time.
-        if (selectedCamera) {
-            setSelectedCamera("");
-        }
+        setVideoDevices([]);
+        setSelectedCamera("");
     }
 
     return () => {
       if (webcamRef.current && webcamRef.current.srcObject) {
-        const stream = webcamRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((track) => track.stop());
+        const currentStream = webcamRef.current.srcObject as MediaStream;
+        currentStream.getTracks().forEach((track) => track.stop());
+        webcamRef.current.srcObject = null;
       }
     };
   }, [isWebcamOn, selectedCamera, toast]);
 
   const handleToggleWebcam = () => setIsWebcamOn(prev => !prev);
+  
+  const handleSwitchCamera = () => {
+    if (videoDevices.length < 2) {
+      toast({ title: "No other cameras found." });
+      return;
+    }
+    const currentIndex = videoDevices.findIndex(device => device.deviceId === selectedCamera);
+    const nextIndex = (currentIndex + 1) % videoDevices.length;
+    setSelectedCamera(videoDevices[nextIndex].deviceId);
+  };
   
   const captureFrame = useCallback(() => {
     if (webcamRef.current && webcamRef.current.readyState === 4 && canvasRef.current) {
@@ -327,10 +329,6 @@ export default function CulinaryCanvasPage() {
       console.error(error);
       toast({ variant: "destructive", title: "AI Error", description: "Failed to suggest recipes." });
     } finally {
-      // Note: we don't set isLoading to false here because the image generation is happening in the background.
-      // The loading state is managed by the isLoadingImage flag on each recipe.
-      // We will set main isLoading to false only when all images are done or failed.
-      // For simplicity, we can set it to false when suggestions are received.
       setIsLoading(false);
     }
   };
@@ -344,7 +342,6 @@ export default function CulinaryCanvasPage() {
     setIsLoading("recipe");
     setActiveRecipe(null);
 
-    // Keep the same image from the suggestion to avoid re-generating
     const suggestion = suggestedRecipes.find(r => r.recipeName === recipeName);
 
     try {
@@ -390,10 +387,16 @@ export default function CulinaryCanvasPage() {
                 <canvas ref={canvasRef} className="hidden" />
             </div>
             <div className="flex flex-wrap justify-center gap-4">
-              <Button onClick={handleToggleWebcam}>
+              <Button onClick={handleToggleWebcam} variant="primary">
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
               </Button>
+              {isWebcamOn && videoDevices.length > 1 && (
+                <Button onClick={handleSwitchCamera} variant="outline">
+                  <SwitchCamera />
+                  Switch Camera
+                </Button>
+              )}
               <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn}>
                 {isLoading === "detect" ? <Loader2 className="animate-spin" /> : <Sparkles />}
                 Detect Ingredients
