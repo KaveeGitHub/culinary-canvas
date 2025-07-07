@@ -57,8 +57,8 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
     setAudioUrl(null);
     try {
       const textForSpeech = `
-        Now reading the instructions for ${recipe.recipeName}.
-        ${recipe.instructions.map((step, i) => `Step ${i + 1}. ${step}`).join(' ')}
+        Now reading the recipe for ${recipe.recipeName}.
+        Instructions: ${recipe.instructions.join(' ')}
       `.trim().replace(/\s+/g, ' ');
 
       const result = await textToSpeech(textForSpeech);
@@ -358,9 +358,20 @@ export default function CulinaryCanvasPage() {
       return;
     }
     setIsLoading("recipe");
-    setActiveRecipe(null);
 
     const suggestion = suggestedRecipes.find(r => r.recipeName === recipeName);
+
+    // If this is the first recipe being generated, create a temporary "shell" recipe object.
+    // This ensures the RecipeCard component is mounted and can display its loading state.
+    // If a recipe is already active, the loading overlay will just appear over the old content.
+    if (!activeRecipe) {
+      setActiveRecipe({
+        recipeName: recipeName,
+        ingredients: [],
+        instructions: [],
+        imageUrl: suggestion?.imageUrl,
+      });
+    }
 
     try {
       const recipeResult = await generateRecipe({
@@ -374,6 +385,7 @@ export default function CulinaryCanvasPage() {
     } catch (error) {
       console.error("Error generating recipe", error);
       toast({ variant: "destructive", title: "AI Error", description: "Failed to generate the full recipe." });
+      setActiveRecipe(null); // Clear recipe on error
     } finally {
       setIsLoading(false);
     }
