@@ -56,21 +56,25 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
     setIsGeneratingAudio(true);
     setAudioUrl(null);
     try {
-      // This version now only reads the instructions to avoid exceeding API limits.
       const textForSpeech = `
         Now reading the instructions for ${recipe.recipeName}.
         ${recipe.instructions.map((step, i) => `Step ${i + 1}. ${step}`).join(' ')}
-      `.trim().replace(/\s+/g, ' '); // Replace multiple spaces/newlines with a single space.
+      `.trim().replace(/\s+/g, ' ');
 
       const result = await textToSpeech(textForSpeech);
       setAudioUrl(result.media);
     } catch (error) {
       console.error("Text-to-speech error:", error);
-      const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+      let errorMessage = "An unknown error occurred.";
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (error) {
+        errorMessage = typeof error === 'object' ? JSON.stringify(error) : String(error);
+      }
       toast({
         variant: "destructive",
         title: "Audio Generation Failed",
-        description: `Failed to generate audio. This can happen if your API Key is missing or has restrictions. Please check your deployment settings. Error: ${errorMessage}`,
+        description: `The text-to-speech service failed. This can happen if the API key is invalid or has restrictions. Please check your deployment settings. Raw error: ${errorMessage}`,
         duration: 9000,
       });
     } finally {
@@ -401,11 +405,11 @@ export default function CulinaryCanvasPage() {
                 <canvas ref={canvasRef} className="hidden" />
             </div>
             <div className="flex flex-wrap justify-center gap-4">
-              <Button onClick={handleToggleWebcam}>
+              <Button onClick={handleToggleWebcam} className="bg-primary hover:bg-primary/90 text-primary-foreground">
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
               </Button>
-              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn}>
+              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} className="bg-primary hover:bg-primary/90 text-primary-foreground">
                 <Sparkles />
                 Detect Ingredients
               </Button>
