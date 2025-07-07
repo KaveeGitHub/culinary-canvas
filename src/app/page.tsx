@@ -34,19 +34,20 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  const recipeText = `
-  Recipe for ${recipe.recipeName}.
-  Ingredients:
-  ${recipe.ingredients.join(', ')}.
-  
-  Instructions:
-  ${recipe.instructions.map((step, i) => `${i + 1}. ${step}`).join('\n')}
-  
-  ${recipe.nutritionalInformation ? `Finally, here is the nutritional information: ${recipe.nutritionalInformation}` : ''}
+  const handleCopy = () => {
+    const textToCopy = `
+Recipe for ${recipe.recipeName}
+
+Ingredients:
+- ${recipe.ingredients.join('\n- ')}
+
+Instructions:
+${recipe.instructions.map((step, i) => `${i + 1}. ${step}`).join('\n')}
+
+${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritionalInformation}` : ''}
     `.trim();
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(textToCopy);
     toast({ title: "Copied to clipboard!" });
   };
 
@@ -54,11 +55,20 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
     setIsGeneratingAudio(true);
     setAudioUrl(null);
     try {
-      const result = await textToSpeech(recipeText);
+      // Create a more concise and speech-friendly version of the text.
+      // This version omits nutritional info and structures the text for better flow.
+      const textForSpeech = `
+        Now reading the recipe for ${recipe.recipeName}.
+        First, the ingredients: ${recipe.ingredients.join(', ')}.
+        Now for the instructions:
+        ${recipe.instructions.map((step, i) => `Step ${i + 1}. ${step}`).join(' ')}
+      `.trim().replace(/\s+/g, ' '); // Replace multiple spaces/newlines with a single space.
+
+      const result = await textToSpeech(textForSpeech);
       setAudioUrl(result.media);
     } catch (error) {
       console.error(error);
-      toast({ variant: "destructive", title: "Audio Error", description: "Failed to generate audio for the recipe." });
+      toast({ variant: "destructive", title: "Audio Error", description: "Failed to generate audio. The recipe may be too long for text-to-speech." });
     } finally {
       setIsGeneratingAudio(false);
     }
@@ -122,7 +132,7 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
             {isGeneratingAudio ? <Loader2 className="animate-spin" /> : <Volume2 />}
             Read Aloud
           </Button>
-          <Button variant="outline" onClick={() => handleCopy(recipeText)}>
+          <Button variant="outline" onClick={handleCopy}>
             <Share2 /> Share Recipe
           </Button>
         </div>
@@ -387,9 +397,13 @@ export default function CulinaryCanvasPage() {
                 <canvas ref={canvasRef} className="hidden" />
             </div>
             <div className="flex flex-wrap justify-center gap-4">
-              <Button onClick={handleToggleWebcam} variant="primary">
+              <Button onClick={handleToggleWebcam} variant="default">
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
+              </Button>
+              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} variant="secondary">
+                <Sparkles />
+                Detect Ingredients
               </Button>
               {isWebcamOn && videoDevices.length > 1 && (
                 <Button onClick={handleSwitchCamera} variant="outline">
@@ -397,10 +411,6 @@ export default function CulinaryCanvasPage() {
                   Switch Camera
                 </Button>
               )}
-              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn}>
-                {isLoading === "detect" ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                Detect Ingredients
-              </Button>
             </div>
           </CardContent>
         </Card>
@@ -443,7 +453,7 @@ export default function CulinaryCanvasPage() {
             </div>
           )}
 
-          {suggestedRecipes.length > 0 && (
+          {suggestedRecipes.length > 0 && !activeRecipe && !isLoading && (
             <Card className="shadow-lg animate-in fade-in-0 duration-500">
               <CardHeader>
                 <CardTitle className="font-headline text-2xl text-primary">Recipe Ideas</CardTitle>
@@ -479,8 +489,43 @@ export default function CulinaryCanvasPage() {
           )}
 
           {activeRecipe && (
-            <RecipeCard recipe={activeRecipe} isLoading={isLoading === 'recipe'} />
+             <RecipeCard recipe={activeRecipe} isLoading={isLoading === 'recipe'} />
           )}
+          
+          {suggestedRecipes.length > 0 && activeRecipe && !isLoading && (
+            <Card className="shadow-lg animate-in fade-in-0 duration-500">
+              <CardHeader>
+                <CardTitle className="font-headline text-2xl text-primary">Or Try Another Recipe</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                {suggestedRecipes.filter(r => r.recipeName !== activeRecipe.recipeName).map((recipe, index) => (
+                  <div 
+                    key={index} 
+                    className="flex items-center justify-between p-4 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer group"
+                    onClick={() => handleGenerateRecipe(recipe.recipeName)}
+                  >
+                    <div className="flex items-center gap-4 flex-1">
+                      <div className="w-20 h-20 rounded-md bg-muted flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        {recipe.isLoadingImage ? (
+                          <Loader2 className="animate-spin text-muted-foreground" />
+                        ) : recipe.imageUrl ? (
+                          <img src={recipe.imageUrl} alt={recipe.recipeName} className="w-full h-full object-cover" />
+                        ) : (
+                          <ChefHat className="w-8 h-8 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
+                        <p className="text-sm text-muted-foreground">{recipe.description}</p>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-5 w-5 text-muted-foreground ml-4 transition-transform group-hover:translate-x-1" />
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
 
           {!isLoading && suggestedRecipes.length === 0 && !activeRecipe && (
             <div className="text-center py-16 text-muted-foreground rounded-lg border-2 border-dashed">
