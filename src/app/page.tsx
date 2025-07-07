@@ -65,8 +65,14 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
       const result = await textToSpeech(textForSpeech);
       setAudioUrl(result.media);
     } catch (error) {
-      console.error(error);
-      toast({ variant: "destructive", title: "Audio Error", description: "Failed to generate audio. The recipe may be too long for text-to-speech." });
+      console.error("Text-to-speech error:", error);
+      const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+      toast({
+        variant: "destructive",
+        title: "Audio Generation Failed",
+        description: `Failed to generate audio. This can happen if your API Key is missing or has restrictions. Please check your deployment settings. Error: ${errorMessage}`,
+        duration: 9000,
+      });
     } finally {
       setIsGeneratingAudio(false);
     }
@@ -395,11 +401,11 @@ export default function CulinaryCanvasPage() {
                 <canvas ref={canvasRef} className="hidden" />
             </div>
             <div className="flex flex-wrap justify-center gap-4">
-              <Button onClick={handleToggleWebcam} variant="default">
+              <Button onClick={handleToggleWebcam}>
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
               </Button>
-              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} variant="default">
+              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn}>
                 <Sparkles />
                 Detect Ingredients
               </Button>
