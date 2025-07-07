@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -55,12 +56,9 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
     setIsGeneratingAudio(true);
     setAudioUrl(null);
     try {
-      // Create a more concise and speech-friendly version of the text.
-      // This version omits nutritional info and structures the text for better flow.
+      // This version now only reads the instructions to avoid exceeding API limits.
       const textForSpeech = `
-        Now reading the recipe for ${recipe.recipeName}.
-        First, the ingredients: ${recipe.ingredients.join(', ')}.
-        Now for the instructions:
+        Now reading the instructions for ${recipe.recipeName}.
         ${recipe.instructions.map((step, i) => `Step ${i + 1}. ${step}`).join(' ')}
       `.trim().replace(/\s+/g, ' '); // Replace multiple spaces/newlines with a single space.
 
@@ -401,7 +399,7 @@ export default function CulinaryCanvasPage() {
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
               </Button>
-              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} variant="secondary">
+              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} variant="default">
                 <Sparkles />
                 Detect Ingredients
               </Button>
