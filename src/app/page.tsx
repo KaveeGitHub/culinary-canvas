@@ -416,7 +416,6 @@ export default function CulinaryCanvasPage() {
               {isWebcamOn && videoDevices.length > 1 && (
                 <Button onClick={handleSwitchCamera} variant="outline">
                   <SwitchCamera />
-                  Switch Camera
                 </Button>
               )}
             </div>
