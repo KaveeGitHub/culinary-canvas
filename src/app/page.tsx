@@ -11,13 +11,13 @@ import {
   ThumbsUp,
   ThumbsDown,
   ChevronRight,
-  Volume2,
   SwitchCamera,
   Bot,
   User,
   Mic,
-  PlayCircle,
-  PauseCircle,
+  Volume2,
+  Pause,
+  Play,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -64,7 +64,6 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeechSupported, setIsSpeechSupported] = useState(false);
   const recognitionRef = useRef<any>(null);
-  const { toast } = useToast();
 
   useEffect(() => {
     setIsSpeechSupported('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
@@ -72,11 +71,6 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
   const handleMicClick = () => {
     if (!isSpeechSupported) {
-        toast({
-            variant: "destructive",
-            title: "Unsupported Browser",
-            description: "Speech recognition is not supported by your browser.",
-        });
         return;
     }
 
@@ -109,17 +103,6 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
     };
 
     recognition.onerror = (event: any) => {
-      let errorMessage = "An unknown error occurred.";
-      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        errorMessage = "Microphone access denied. Please enable it in browser settings.";
-      } else if (event.error === 'no-speech') {
-        errorMessage = "No speech was detected. Please try again.";
-      }
-      toast({
-        variant: "destructive",
-        title: "Speech Error",
-        description: errorMessage,
-      });
       setIsRecording(false);
     };
   };
@@ -153,9 +136,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
       setMessages(prev => [...prev, chefMessage]);
 
     } catch (error) {
-      console.error("Ask Chef error:", error);
-      const errorMessage: ChatMessage = { role: 'model', content: "Sorry, I'm having trouble responding right now. Please try again in a moment." };
-      setMessages(prev => [...prev, errorMessage]);
+       // Fail silently
     } finally {
       setIsChefLoading(false);
     }
@@ -176,7 +157,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px] md:max-w-[600px] h-[90vh] grid grid-rows-[auto_1fr_auto]">
+      <DialogContent className="sm:max-w-[425px] md:max-w-[600px] h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="font-headline text-2xl flex items-center gap-2">
             <Bot /> Ask the Chef
@@ -186,7 +167,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="pr-4 -mr-4 min-h-0">
+        <ScrollArea className="pr-4 -mr-4 flex-1 min-h-0">
           <div className="space-y-4">
             {messages.map((message, index) => (
               <div
@@ -236,7 +217,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
           </div>
         </ScrollArea>
         
-        <DialogFooter>
+        <DialogFooter className="mt-auto pt-4">
           <form onSubmit={handleSendMessage} className="w-full flex items-center gap-2">
             <Input
               value={input}
@@ -267,25 +248,59 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 };
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
-  const { toast } = useToast();
-  const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+    const { toast } = useToast();
+    const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+    const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
+    const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  const [speechStatus, setSpeechStatus] = useState<'idle' | 'speaking' | 'paused'>('idle');
-  const [isTtsSupported, setIsTtsSupported] = useState(false);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+    // This effect ensures that when a new recipe is loaded, any ongoing speech from the previous recipe is stopped.
+    useEffect(() => {
+        return () => {
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        };
+    }, [recipe]);
 
-  useEffect(() => {
-    setIsTtsSupported(typeof window !== 'undefined' && 'speechSynthesis' in window);
-    // Cleanup speech synthesis on component unmount
-    return () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
+    const handleReadAloud = () => {
+        if (!window.speechSynthesis || speechState !== 'idle') {
+            return;
+        }
+
+        const textToSpeak = [
+            `Recipe for ${recipe.recipeName}.`,
+            'The ingredients are:', ...recipe.ingredients,
+            'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
+        ].join('. ');
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utteranceRef.current = utterance;
+
+        utterance.onstart = () => setSpeechState('speaking');
+        utterance.onpause = () => setSpeechState('paused');
+        utterance.onresume = () => setSpeechState('speaking');
+        utterance.onend = () => setSpeechState('idle');
+        utterance.onerror = (e) => {
+            setSpeechState('idle');
+        };
+
+        window.speechSynthesis.speak(utterance);
     };
-  }, []);
 
-  const handleCopy = () => {
-    const textToCopy = `
+    const handlePause = () => {
+        if (window.speechSynthesis && speechState === 'speaking') {
+            window.speechSynthesis.pause();
+        }
+    };
+
+    const handleResume = () => {
+        if (window.speechSynthesis && speechState === 'paused') {
+            window.speechSynthesis.resume();
+        }
+    };
+
+    const handleCopy = () => {
+        const textToCopy = `
 Recipe for ${recipe.recipeName}
 
 Ingredients:
@@ -297,75 +312,8 @@ ${recipe.instructions.map((step, i) => `${i + 1}. ${step}`).join('\n')}
 ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritionalInformation}` : ''}
     `.trim();
 
-    navigator.clipboard.writeText(textToCopy);
-    toast({ title: "Copied to clipboard!" });
-  };
-
-  const handleReadAloud = () => {
-    if (!isTtsSupported) {
-      toast({
-        variant: "destructive",
-        title: "Unsupported Browser",
-        description: "Your browser does not support text-to-speech.",
-      });
-      return;
-    }
-  
-    const synth = window.speechSynthesis;
-  
-    if (speechStatus === 'speaking') {
-      synth.pause();
-      setSpeechStatus('paused');
-    } else if (speechStatus === 'paused') {
-      synth.resume();
-      setSpeechStatus('speaking');
-    } else { // status is 'idle'
-      synth.cancel(); // Clear any previous utterances
-  
-      const textForSpeech = `
-        Recipe for ${recipe.recipeName}.
-        Instructions: ${recipe.instructions.join('. ')}
-      `.trim().replace(/\s+/g, ' ');
-  
-      const newUtterance = new SpeechSynthesisUtterance(textForSpeech);
-      utteranceRef.current = newUtterance;
-  
-      newUtterance.onstart = () => {
-        setSpeechStatus('speaking');
-      };
-  
-      newUtterance.onend = () => {
-        setSpeechStatus('idle');
-        utteranceRef.current = null;
-      };
-  
-      newUtterance.onerror = () => {
-        setSpeechStatus('idle');
-        utteranceRef.current = null;
-        toast({
-          variant: "destructive",
-          title: "Speech Error",
-          description: "An error occurred while trying to read the text.",
-        });
-      };
-  
-      synth.speak(newUtterance);
-    }
-  };
-
-  const getButtonProps = () => {
-    switch (speechStatus) {
-      case 'speaking':
-        return { Icon: PauseCircle, text: 'Pause' };
-      case 'paused':
-        return { Icon: PlayCircle, text: 'Resume' };
-      default: // 'idle'
-        return { Icon: Volume2, text: 'Read Aloud' };
-    }
-  };
-  
-  const { Icon: SpeechIcon, text: speechText } = getButtonProps();
-
+        navigator.clipboard.writeText(textToCopy);
+    };
 
   return (
     <Card className="shadow-lg animate-in fade-in-0 duration-500 relative">
@@ -415,24 +363,37 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
         </CardFooter>
       )}
       <Separator className="my-4" />
-      <CardFooter className="justify-between flex-wrap gap-4">
-        <div className="flex gap-2 items-center">
+      <CardFooter className="flex-col items-stretch gap-y-4">
+        <div className="w-full flex justify-between items-center flex-wrap gap-4 pt-2">
+          <div className="flex gap-2 items-center">
             <p className="text-sm font-bold">Rate it:</p>
             <Button variant="ghost" size="icon"><ThumbsUp className="w-5 h-5"/></Button>
             <Button variant="ghost" size="icon"><ThumbsDown className="w-5 h-5"/></Button>
-        </div>
-        <div className="flex gap-2 items-center">
-          <Button variant="outline" onClick={handleReadAloud} disabled={!isTtsSupported}>
-            <SpeechIcon />
-            {speechText}
-          </Button>
-          <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
-            <Sparkles />
-            Ask Chef
-          </Button>
-          <Button variant="outline" onClick={handleCopy}>
-            <Share2 /> Share Recipe
-          </Button>
+          </div>
+           <div className="flex gap-2 items-center flex-wrap justify-end">
+                 {speechState === 'idle' && (
+                    <Button variant="outline" onClick={handleReadAloud}>
+                        <Volume2 /> Read Aloud
+                    </Button>
+                )}
+                {speechState === 'speaking' && (
+                     <Button variant="outline" onClick={handlePause}>
+                        <Pause /> Pause
+                    </Button>
+                )}
+                {speechState === 'paused' && (
+                    <Button variant="outline" onClick={handleResume}>
+                        <Play /> Resume
+                    </Button>
+                )}
+            <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
+              <Sparkles />
+              Ask Chef
+            </Button>
+            <Button variant="outline" onClick={handleCopy}>
+              <Share2 /> Share Recipe
+            </Button>
+          </div>
         </div>
       </CardFooter>
        <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} />
@@ -498,16 +459,10 @@ export default function CulinaryCanvasPage() {
                 webcamRef.current.srcObject = stream;
             }
         } else {
-             throw new Error("No video input devices found.");
+             // Fail silently
         }
 
       } catch (err) {
-        console.error("Error accessing webcam:", err);
-        toast({
-          variant: "destructive",
-          title: "Webcam Error",
-          description: "Could not access webcam. Check browser permissions or if a camera is connected.",
-        });
         setIsWebcamOn(false);
       }
     };
@@ -532,7 +487,6 @@ export default function CulinaryCanvasPage() {
   
   const handleSwitchCamera = () => {
     if (videoDevices.length < 2) {
-      toast({ title: "No other cameras found." });
       return;
     }
     const currentIndex = videoDevices.findIndex(device => device.deviceId === selectedCamera);
@@ -557,25 +511,18 @@ export default function CulinaryCanvasPage() {
 
   const handleDetectFood = async () => {
     if (!isWebcamOn) {
-        toast({ title: "Webcam is off", description: "Turn on the webcam to detect food." });
         return;
     }
     const photoDataUri = captureFrame();
     if (!photoDataUri) {
-      toast({ variant: "destructive", title: "Error", description: "Could not capture frame. Try again." });
       return;
     }
     setIsLoading("detect");
     try {
       const result = await detectFood({ photoDataUri });
       setIngredients(prev => [...new Set([...prev.split(',').map(i => i.trim()).filter(Boolean), ...result.foodItems])].join(', '));
-      toast({
-        title: "Food Detected!",
-        description: `Added: ${result.foodItems.join(", ")}`,
-      });
     } catch (error) {
-      console.error(error);
-      toast({ variant: "destructive", title: "AI Error", description: "Failed to detect food items." });
+        // Fail silently
     } finally {
       setIsLoading(false);
     }
@@ -584,7 +531,6 @@ export default function CulinaryCanvasPage() {
   const handleSuggestRecipes = async () => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
-      toast({ title: "No Ingredients", description: "Please add some ingredients first." });
       return;
     }
     setIsLoading("suggest");
@@ -598,7 +544,6 @@ export default function CulinaryCanvasPage() {
       });
       
       if (result.recipes.length === 0) {
-        toast({ title: "No recipes found", description: "Try adding more ingredients."});
         setIsLoading(false)
         return;
       }
@@ -606,8 +551,7 @@ export default function CulinaryCanvasPage() {
       setSuggestedRecipes(result.recipes);
 
     } catch (error) {
-      console.error(error);
-      toast({ variant: "destructive", title: "AI Error", description: "Failed to suggest recipes." });
+        // Fail silently
     } finally {
       setIsLoading(false);
     }
@@ -616,7 +560,6 @@ export default function CulinaryCanvasPage() {
   const handleGenerateRecipe = async (recipeName: string) => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
-        toast({ title: "No Ingredients", description: "Please add some ingredients to generate a recipe." });
         return;
     }
 
@@ -644,28 +587,15 @@ export default function CulinaryCanvasPage() {
         if (recipeSettled.status === 'fulfilled') {
             recipeResult = recipeSettled.value;
         } else {
-             // If recipe fails, it's a critical error
-             console.error("Recipe generation failed:", recipeSettled.reason);
-             toast({
-                variant: "destructive",
-                title: "Recipe Generation Failed",
-                description: "Could not generate the recipe. Please try again.",
-            });
-            setActiveRecipe(null);
-            setIsLoading(false);
-            return;
+             setActiveRecipe(null);
+             setIsLoading(false);
+             return;
         }
 
         if (imageSettled.status === 'fulfilled') {
             imageResult = imageSettled.value;
         } else {
-            console.error("Image generation failed:", imageSettled.reason);
-            const reasonStr = (imageSettled.reason || '').toString();
-            if (reasonStr.includes('429') || reasonStr.includes('quota')) {
-              // Silently fail on quota error, don't show toast
-            } else {
-              // Fail silently for other image errors too
-            }
+            // Fail silently for image generation errors
         }
         
         const finalRecipe: ActiveRecipe = {
@@ -677,12 +607,6 @@ export default function CulinaryCanvasPage() {
         setActiveRecipe(finalRecipe);
 
     } catch (error) {
-        console.error("An unexpected error occurred in handleGenerateRecipe", error);
-        toast({
-            variant: "destructive",
-            title: "An Unexpected Error Occurred",
-            description: "Please try again.",
-        });
         setActiveRecipe(null);
     } finally {
         setIsLoading(false);
@@ -785,7 +709,17 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <ChefHat className="w-8 h-8 text-muted-foreground flex-shrink-0" />
+                      {recipe.imageUrl ? (
+                        <img
+                          src={recipe.imageUrl}
+                          alt={recipe.recipeName}
+                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                          <ChefHat className="w-8 h-8 text-muted-foreground" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
@@ -816,7 +750,17 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <ChefHat className="w-8 h-8 text-muted-foreground flex-shrink-0" />
+                       {recipe.imageUrl ? (
+                        <img
+                          src={recipe.imageUrl}
+                          alt={recipe.recipeName}
+                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                          <ChefHat className="w-8 h-8 text-muted-foreground" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
