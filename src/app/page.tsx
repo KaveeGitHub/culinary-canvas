@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 
 type ActiveRecipe = GenerateRecipeOutput & { imageUrl?: string; imageHint?: string };
@@ -248,56 +249,56 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 };
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
-    const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
-    const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-    // This effect ensures that when a new recipe is loaded, any ongoing speech from the previous recipe is stopped.
-    useEffect(() => {
-        return () => {
-            if (window.speechSynthesis) {
-                window.speechSynthesis.cancel();
-            }
-        };
-    }, [recipe]);
+  // This effect ensures that when a new recipe is loaded, any ongoing speech from the previous recipe is stopped.
+  useEffect(() => {
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, [recipe]);
 
-    const handleReadAloud = () => {
-        if (!window.speechSynthesis || speechState !== 'idle') {
-            return;
-        }
+  const handleReadAloud = () => {
+    if (!window.speechSynthesis || speechState !== 'idle') {
+      return;
+    }
 
-        const textToSpeak = [
-            `Recipe for ${recipe.recipeName}.`,
-            'The ingredients are:', ...recipe.ingredients,
-            'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
-        ].join('. ');
+    const textToSpeak = [
+      `Recipe for ${recipe.recipeName}.`,
+      'The ingredients are:', ...recipe.ingredients,
+      'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
+    ].join('. ');
 
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        utteranceRef.current = utterance;
-        
-        utterance.volume = 1; // Set volume to maximum
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utteranceRef.current = utterance;
+    
+    utterance.volume = 1;
 
-        utterance.onstart = () => setSpeechState('speaking');
-        utterance.onpause = () => setSpeechState('paused');
-        utterance.onresume = () => setSpeechState('speaking');
-        utterance.onend = () => setSpeechState('idle');
-        utterance.onerror = (e) => {
-            setSpeechState('idle');
-        };
-
-        window.speechSynthesis.speak(utterance);
+    utterance.onstart = () => setSpeechState('speaking');
+    utterance.onpause = () => setSpeechState('paused');
+    utterance.onresume = () => setSpeechState('speaking');
+    utterance.onend = () => setSpeechState('idle');
+    utterance.onerror = (e) => {
+        setSpeechState('idle');
     };
 
-    const handlePause = () => {
-        if (window.speechSynthesis && speechState === 'speaking') {
-            window.speechSynthesis.pause();
-        }
-    };
+    window.speechSynthesis.speak(utterance);
+  };
 
-    const handleResume = () => {
-        if (window.speechSynthesis && speechState === 'paused') {
-            window.speechSynthesis.resume();
-        }
-    };
+  const handlePause = () => {
+    if (window.speechSynthesis && speechState === 'speaking') {
+      window.speechSynthesis.pause();
+    }
+  };
+
+  const handleResume = () => {
+    if (window.speechSynthesis && speechState === 'paused') {
+      window.speechSynthesis.resume();
+    }
+  };
 
     const handleCopy = () => {
         const textToCopy = `
@@ -421,69 +422,79 @@ export default function CulinaryCanvasPage() {
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState<string>("");
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const isMobile = useIsMobile();
 
-
-  const { toast } = useToast();
 
   useEffect(() => {
     let stream: MediaStream | null = null;
 
     const setupWebcam = async () => {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoInputs = devices.filter(d => d.kind === 'videoinput');
-        setVideoDevices(videoInputs);
+        try {
+            // Get device list first to make the switch button appear immediately
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoInputs = devices.filter(d => d.kind === 'videoinput');
+            setVideoDevices(videoInputs);
 
-        let cameraToUse = selectedCamera;
-        if (!cameraToUse || !videoInputs.find(d => d.deviceId === cameraToUse)) {
-            const integratedCamera = videoInputs.find(d => 
-              d.label.toLowerCase().includes('facetime') || 
-              d.label.toLowerCase().includes('built-in') || 
-              d.label.toLowerCase().includes('integrated')
-            );
-            cameraToUse = integratedCamera?.deviceId || videoInputs[0]?.deviceId;
-            if (cameraToUse) {
-                setSelectedCamera(cameraToUse);
+            if (videoInputs.length === 0) {
+                return; // No camera available
             }
-        }
-        
-        if (cameraToUse) {
-            const constraints: MediaStreamConstraints = {
-                video: { deviceId: { exact: cameraToUse } },
-            };
+
+            let constraints: MediaStreamConstraints = { video: {} };
+            
+            if (selectedCamera) {
+                // Use the explicitly selected camera if available (e.g., after switching)
+                (constraints.video as MediaTrackConstraints).deviceId = { exact: selectedCamera };
+            } else if (isMobile) {
+                // On mobile, prefer the back camera ('environment')
+                (constraints.video as MediaTrackConstraints).facingMode = { ideal: 'environment' };
+            } else {
+                // For desktop, a generic request is fine
+                constraints.video = true;
+            }
+
             stream = await navigator.mediaDevices.getUserMedia(constraints);
+            
             if (webcamRef.current) {
                 webcamRef.current.srcObject = stream;
             }
-        } else if (videoInputs.length > 0) {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            if (webcamRef.current) {
-                webcamRef.current.srcObject = stream;
+            
+            // After getting the stream, ensure the 'selectedCamera' state is in sync
+            const currentTrack = stream.getVideoTracks()[0];
+            const currentSettings = currentTrack.getSettings();
+            if (currentSettings.deviceId && currentSettings.deviceId !== selectedCamera) {
+                setSelectedCamera(currentSettings.deviceId);
             }
-        } else {
-             // Fail silently
-        }
 
-      } catch (err) {
-        setIsWebcamOn(false);
-      }
+        } catch (err) {
+            // If our preferred constraints fail (e.g., no back camera), try the default
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (webcamRef.current) {
+                    webcamRef.current.srcObject = stream;
+                }
+            } catch (fallbackErr) {
+                setIsWebcamOn(false);
+            }
+        }
     };
 
     if (isWebcamOn) {
-      setupWebcam();
+        setupWebcam();
     } else {
+        // When webcam is off, clear devices and selected camera
         setVideoDevices([]);
         setSelectedCamera("");
     }
 
     return () => {
-      if (webcamRef.current && webcamRef.current.srcObject) {
-        const currentStream = webcamRef.current.srcObject as MediaStream;
-        currentStream.getTracks().forEach((track) => track.stop());
-        webcamRef.current.srcObject = null;
-      }
+        // Cleanup: stop any active stream when the component unmounts or dependencies change
+        if (webcamRef.current && webcamRef.current.srcObject) {
+            const currentStream = webcamRef.current.srcObject as MediaStream;
+            currentStream.getTracks().forEach((track) => track.stop());
+            webcamRef.current.srcObject = null;
+        }
     };
-  }, [isWebcamOn, selectedCamera, toast]);
+  }, [isWebcamOn, selectedCamera, isMobile]);
 
   const handleToggleWebcam = () => setIsWebcamOn(prev => !prev);
   
