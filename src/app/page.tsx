@@ -57,6 +57,7 @@ const FormattedMessage = ({ content }: { content: string }) => {
 };
 
 const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void }) => {
+  const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isChefLoading, setIsChefLoading] = useState(false);
@@ -137,7 +138,12 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
       setMessages(prev => [...prev, chefMessage]);
 
     } catch (error) {
-       // Fail silently
+       console.error("Chef Chat Error:", error);
+       toast({
+          variant: "destructive",
+          title: "Chef is unavailable",
+          description: "There was an error connecting to the AI chef. Please try again later."
+       });
     } finally {
       setIsChefLoading(false);
     }
@@ -262,30 +268,33 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
   }, [recipe]);
 
   const handleReadAloud = () => {
-    if (!window.speechSynthesis || speechState !== 'idle') {
+    if (!window.speechSynthesis) {
       return;
     }
 
-    const textToSpeak = [
-      `Recipe for ${recipe.recipeName}.`,
-      'The ingredients are:', ...recipe.ingredients,
-      'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
-    ].join('. ');
+    if (speechState === 'idle') {
+      const textToSpeak = [
+        `Recipe for ${recipe.recipeName}.`,
+        'The ingredients are:', ...recipe.ingredients,
+        'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
+      ].join('. ');
 
-    const utterance = new SpeechSynthesisUtterance(textToSpeak);
-    utteranceRef.current = utterance;
-    
-    utterance.volume = 1;
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      utteranceRef.current = utterance;
+      
+      utterance.volume = 1;
+      utterance.onstart = () => setSpeechState('speaking');
+      utterance.onpause = () => setSpeechState('paused');
+      utterance.onresume = () => setSpeechState('speaking');
+      utterance.onend = () => setSpeechState('idle');
+      utterance.onerror = () => {
+          setSpeechState('idle');
+      };
 
-    utterance.onstart = () => setSpeechState('speaking');
-    utterance.onpause = () => setSpeechState('paused');
-    utterance.onresume = () => setSpeechState('speaking');
-    utterance.onend = () => setSpeechState('idle');
-    utterance.onerror = () => {
-        setSpeechState('idle');
-    };
-
-    window.speechSynthesis.speak(utterance);
+      window.speechSynthesis.speak(utterance);
+    } else if (speechState === 'paused') {
+      window.speechSynthesis.resume();
+    }
   };
 
   const handlePause = () => {
@@ -294,11 +303,6 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
     }
   };
 
-  const handleResume = () => {
-    if (window.speechSynthesis && speechState === 'paused') {
-      window.speechSynthesis.resume();
-    }
-  };
 
     const handleCopy = () => {
         const textToCopy = `
@@ -374,7 +378,7 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
             <Button variant="ghost" size="icon"><ThumbsDown className="w-5 h-5"/></Button>
           </div>
            <div className="flex gap-2 items-center flex-wrap justify-end">
-                 {speechState === 'idle' && (
+                {speechState === 'idle' && (
                     <Button variant="outline" onClick={handleReadAloud}>
                         <Volume2 /> Read Aloud
                     </Button>
@@ -385,7 +389,7 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
                     </Button>
                 )}
                 {speechState === 'paused' && (
-                    <Button variant="outline" onClick={handleResume}>
+                    <Button variant="outline" onClick={handleReadAloud}>
                         <Play /> Resume
                     </Button>
                 )}
@@ -762,3 +766,5 @@ export default function CulinaryCanvasPage() {
     </div>
   );
 }
+
+    
