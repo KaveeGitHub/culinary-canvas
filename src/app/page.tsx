@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef, generateImage } from "@/ai";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -281,7 +281,7 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
     utterance.onpause = () => setSpeechState('paused');
     utterance.onresume = () => setSpeechState('speaking');
     utterance.onend = () => setSpeechState('idle');
-    utterance.onerror = (e) => {
+    utterance.onerror = () => {
         setSpeechState('idle');
     };
 
@@ -556,11 +556,6 @@ export default function CulinaryCanvasPage() {
         preferredCuisines
       });
       
-      if (result.recipes.length === 0) {
-        setIsLoading(false)
-        return;
-      }
-
       setSuggestedRecipes(result.recipes);
 
     } catch (error) {
@@ -576,27 +571,28 @@ export default function CulinaryCanvasPage() {
         return;
     }
 
-    const selectedSuggestion = suggestedRecipes.find(r => r.recipeName === recipeName);
-
     setIsLoading("recipe");
+    // Set a placeholder recipe to show the loading state on the card
     setActiveRecipe({
         recipeName: recipeName,
         ingredients: [],
         instructions: [],
-        imageUrl: selectedSuggestion?.imageUrl,
-        imageHint: recipeName.split(' ').slice(0, 2).join(' '),
     });
 
     try {
-        const recipeResult = await generateRecipe({
-            recipeName,
-            ingredients: ingredientList,
-            dietaryRestrictions,
-        });
+        // Generate recipe text and image in parallel for efficiency
+        const [recipeResult, imageResult] = await Promise.all([
+            generateRecipe({
+                recipeName,
+                ingredients: ingredientList,
+                dietaryRestrictions,
+            }),
+            generateImage({ recipeName })
+        ]);
         
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
-            imageUrl: selectedSuggestion?.imageUrl,
+            imageUrl: imageResult.imageUrl,
             imageHint: recipeName.split(' ').slice(0, 2).join(' '),
         };
         
@@ -705,17 +701,9 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      {recipe.imageUrl ? (
-                        <img
-                          src={recipe.imageUrl}
-                          alt={recipe.recipeName}
-                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
-                        />
-                      ) : (
-                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                          <ChefHat className="w-8 h-8 text-muted-foreground" />
-                        </div>
-                      )}
+                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                        <ChefHat className="w-8 h-8 text-muted-foreground" />
+                      </div>
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
@@ -746,17 +734,9 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                       {recipe.imageUrl ? (
-                        <img
-                          src={recipe.imageUrl}
-                          alt={recipe.recipeName}
-                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
-                        />
-                      ) : (
-                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                          <ChefHat className="w-8 h-8 text-muted-foreground" />
-                        </div>
-                      )}
+                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                        <ChefHat className="w-8 h-8 text-muted-foreground" />
+                      </div>
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
