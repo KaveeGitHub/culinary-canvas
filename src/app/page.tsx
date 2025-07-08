@@ -56,6 +56,7 @@ const FormattedMessage = ({ content }: { content: string }) => {
 };
 
 const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void }) => {
+  const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isChefLoading, setIsChefLoading] = useState(false);
@@ -71,6 +72,11 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
   const handleMicClick = () => {
     if (!isSpeechSupported) {
+        toast({
+            variant: "destructive",
+            title: "Voice Not Supported",
+            description: "Your browser does not support speech recognition.",
+        });
         return;
     }
 
@@ -103,6 +109,11 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
     };
 
     recognition.onerror = (event: any) => {
+      toast({
+        variant: "destructive",
+        title: "Voice Input Error",
+        description: `Could not recognize speech. Error: ${event.error}`,
+      });
       setIsRecording(false);
     };
   };
