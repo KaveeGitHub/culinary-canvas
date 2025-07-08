@@ -55,7 +55,7 @@ Ingredients:
 
 Instructions:
 {{#each recipe.instructions}}
-{{@index_1}}. {{{this}}}
+- {{{this}}}
 {{/each}}
 
 {{#if recipe.nutritionalInformation}}
