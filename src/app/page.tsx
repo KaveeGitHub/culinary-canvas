@@ -16,6 +16,8 @@ import {
   Bot,
   User,
   Mic,
+  PlayCircle,
+  PauseCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, textToSpeech, generateImage, askChef } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, generateImage, askChef } from "@/ai";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -266,9 +268,21 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
   const { toast } = useToast();
-  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+
+  const [speechStatus, setSpeechStatus] = useState<'idle' | 'speaking' | 'paused'>('idle');
+  const [isTtsSupported, setIsTtsSupported] = useState(false);
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  useEffect(() => {
+    setIsTtsSupported(typeof window !== 'undefined' && 'speechSynthesis' in window);
+    // Cleanup speech synthesis on component unmount
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   const handleCopy = () => {
     const textToCopy = `
@@ -287,36 +301,71 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
     toast({ title: "Copied to clipboard!" });
   };
 
-  const handleReadAloud = async () => {
-    setIsGeneratingAudio(true);
-    setAudioUrl(null);
-    try {
+  const handleReadAloud = () => {
+    if (!isTtsSupported) {
+      toast({
+        variant: "destructive",
+        title: "Unsupported Browser",
+        description: "Your browser does not support text-to-speech.",
+      });
+      return;
+    }
+  
+    const synth = window.speechSynthesis;
+  
+    if (speechStatus === 'speaking') {
+      synth.pause();
+      setSpeechStatus('paused');
+    } else if (speechStatus === 'paused') {
+      synth.resume();
+      setSpeechStatus('speaking');
+    } else { // status is 'idle'
+      synth.cancel(); // Clear any previous utterances
+  
       const textForSpeech = `
         Recipe for ${recipe.recipeName}.
-        Instructions: ${recipe.instructions.join(' ')}
+        Instructions: ${recipe.instructions.join('. ')}
       `.trim().replace(/\s+/g, ' ');
-
-      const result = await textToSpeech(textForSpeech);
-      setAudioUrl(result.media);
-    } catch (error) {
-      console.error("Text-to-speech error:", error);
-      if (error instanceof Error && (error.message.includes('429') || error.message.toLowerCase().includes('quota'))) {
+  
+      const newUtterance = new SpeechSynthesisUtterance(textForSpeech);
+      utteranceRef.current = newUtterance;
+  
+      newUtterance.onstart = () => {
+        setSpeechStatus('speaking');
+      };
+  
+      newUtterance.onend = () => {
+        setSpeechStatus('idle');
+        utteranceRef.current = null;
+      };
+  
+      newUtterance.onerror = () => {
+        setSpeechStatus('idle');
+        utteranceRef.current = null;
         toast({
           variant: "destructive",
-          title: "Limit Exceeded",
-          description: "You have exceeded the limit for today.",
+          title: "Speech Error",
+          description: "An error occurred while trying to read the text.",
         });
-      } else {
-        toast({
-          variant: "destructive",
-          title: "Audio Generation Failed",
-          description: "Could not generate audio. Please try again later.",
-        });
-      }
-    } finally {
-      setIsGeneratingAudio(false);
+      };
+  
+      synth.speak(newUtterance);
     }
   };
+
+  const getButtonProps = () => {
+    switch (speechStatus) {
+      case 'speaking':
+        return { Icon: PauseCircle, text: 'Pause' };
+      case 'paused':
+        return { Icon: PlayCircle, text: 'Resume' };
+      default: // 'idle'
+        return { Icon: Volume2, text: 'Read Aloud' };
+    }
+  };
+  
+  const { Icon: SpeechIcon, text: speechText } = getButtonProps();
+
 
   return (
     <Card className="shadow-lg animate-in fade-in-0 duration-500 relative">
@@ -373,9 +422,9 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
             <Button variant="ghost" size="icon"><ThumbsDown className="w-5 h-5"/></Button>
         </div>
         <div className="flex gap-2 items-center">
-          <Button variant="outline" onClick={handleReadAloud} disabled={isGeneratingAudio}>
-            {isGeneratingAudio ? <Loader2 className="animate-spin" /> : <Volume2 />}
-            Read Aloud
+          <Button variant="outline" onClick={handleReadAloud} disabled={!isTtsSupported}>
+            <SpeechIcon />
+            {speechText}
           </Button>
           <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
             <Sparkles />
@@ -386,11 +435,6 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
           </Button>
         </div>
       </CardFooter>
-      {audioUrl && (
-          <CardFooter>
-              <audio key={audioUrl} controls autoPlay src={audioUrl} className="w-full" />
-          </CardFooter>
-      )}
        <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} />
     </Card>
   );
@@ -616,7 +660,12 @@ export default function CulinaryCanvasPage() {
             imageResult = imageSettled.value;
         } else {
             console.error("Image generation failed:", imageSettled.reason);
-            // Fail silently, don't show toast
+            const reasonStr = (imageSettled.reason || '').toString();
+            if (reasonStr.includes('429') || reasonStr.includes('quota')) {
+              // Silently fail on quota error, don't show toast
+            } else {
+              // Fail silently for other image errors too
+            }
         }
         
         const finalRecipe: ActiveRecipe = {
