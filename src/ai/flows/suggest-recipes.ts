@@ -20,8 +20,8 @@ const SuggestRecipesInputSchema = z.object({
 export type SuggestRecipesInput = z.infer<typeof SuggestRecipesInputSchema>;
 
 const RecipeSuggestionSchema = z.object({
-  recipeName: z.string().describe('The name of the recipe suggestion.'),
-  description: z.string().describe('A short, enticing description of the recipe.'),
+    recipeName: z.string().describe('The name of the recipe suggestion.'),
+    description: z.string().describe('A short, enticing description of the recipe.'),
 });
 export type RecipeSuggestion = z.infer<typeof RecipeSuggestionSchema>;
 
@@ -34,6 +34,23 @@ export async function suggestRecipes(input: SuggestRecipesInput): Promise<Sugges
   return suggestRecipesFlow(input);
 }
 
+const prompt = ai.definePrompt({
+  name: 'suggestRecipesPrompt',
+  input: {schema: SuggestRecipesInputSchema},
+  output: {schema: SuggestRecipesOutputSchema},
+  prompt: `You are a creative chef who inspires people to cook with what they have.
+
+  Based on the following ingredients, suggest 5-10 diverse and interesting recipes that can be made *only* with the provided ingredients (plus basic pantry items like oil, salt, pepper, water). For each recipe, provide a name and a short (1-2 sentence) description.
+
+  Available Ingredients: {{#each ingredients}}{{{this}}}{{#unless @last}}, {{/unless}}{{/each}}
+  Dietary Restrictions: {{{dietaryRestrictions}}}
+  Preferred Cuisines: {{{preferredCuisines}}}
+
+  Make sure the recipe names are distinct and sound appetizing.
+  Return the result in the requested JSON format.
+`,
+});
+
 const suggestRecipesFlow = ai.defineFlow(
   {
     name: 'suggestRecipesFlow',
@@ -41,23 +58,7 @@ const suggestRecipesFlow = ai.defineFlow(
     outputSchema: SuggestRecipesOutputSchema,
   },
   async input => {
-    const {output} = await ai.generate({
-      prompt: `You are a creative chef who inspires people to cook with what they have.
-  
-      Based on the following ingredients, suggest 5-10 diverse and interesting recipes that can be made *only* with the provided ingredients (plus basic pantry items like oil, salt, pepper, water). For each recipe, provide a name and a short (1-2 sentence) description.
-    
-      Available Ingredients: ${input.ingredients.join(', ')}
-      Dietary Restrictions: ${input.dietaryRestrictions || 'None'}
-      Preferred Cuisines: ${input.preferredCuisines || 'Any'}
-    
-      Make sure the recipe names are distinct and sound appetizing.
-      Return the result in the requested JSON format.
-    `,
-      output: {
-        schema: SuggestRecipesOutputSchema,
-      },
-    });
-
+    const {output} = await prompt(input);
     return output!;
   }
 );

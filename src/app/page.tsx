@@ -11,13 +11,13 @@ import {
   ThumbsUp,
   ThumbsDown,
   ChevronRight,
+  Volume2,
   SwitchCamera,
   Bot,
   User,
   Mic,
-  Volume2,
-  Pause,
-  Play,
+  PlayCircle,
+  PauseCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,12 +27,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef, generateImage } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, generateImage, askChef } from "@/ai";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { useIsMobile } from "@/hooks/use-mobile";
 
 
 type ActiveRecipe = GenerateRecipeOutput & { imageUrl?: string; imageHint?: string };
@@ -57,7 +56,6 @@ const FormattedMessage = ({ content }: { content: string }) => {
 };
 
 const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void }) => {
-  const { toast } = useToast();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isChefLoading, setIsChefLoading] = useState(false);
@@ -66,6 +64,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeechSupported, setIsSpeechSupported] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     setIsSpeechSupported('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
@@ -73,6 +72,11 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
   const handleMicClick = () => {
     if (!isSpeechSupported) {
+        toast({
+            variant: "destructive",
+            title: "Unsupported Browser",
+            description: "Speech recognition is not supported by your browser.",
+        });
         return;
     }
 
@@ -105,6 +109,17 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
     };
 
     recognition.onerror = (event: any) => {
+      let errorMessage = "An unknown error occurred.";
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        errorMessage = "Microphone access denied. Please enable it in browser settings.";
+      } else if (event.error === 'no-speech') {
+        errorMessage = "No speech was detected. Please try again.";
+      }
+      toast({
+        variant: "destructive",
+        title: "Speech Error",
+        description: errorMessage,
+      });
       setIsRecording(false);
     };
   };
@@ -138,12 +153,9 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
       setMessages(prev => [...prev, chefMessage]);
 
     } catch (error) {
-       console.error("Chef Chat Error:", error);
-       toast({
-          variant: "destructive",
-          title: "Chef is unavailable",
-          description: "There was an error connecting to the AI chef. Please try again later."
-       });
+      console.error("Ask Chef error:", error);
+      const errorMessage: ChatMessage = { role: 'model', content: "Sorry, I'm having trouble responding right now. Please try again in a moment." };
+      setMessages(prev => [...prev, errorMessage]);
     } finally {
       setIsChefLoading(false);
     }
@@ -164,7 +176,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px] md:max-w-[600px] h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-[425px] md:max-w-[600px] h-[90vh] grid grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <DialogTitle className="font-headline text-2xl flex items-center gap-2">
             <Bot /> Ask the Chef
@@ -174,7 +186,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="pr-4 -mr-4 flex-1 min-h-0">
+        <ScrollArea className="pr-4 -mr-4 min-h-0">
           <div className="space-y-4">
             {messages.map((message, index) => (
               <div
@@ -224,7 +236,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
           </div>
         </ScrollArea>
         
-        <DialogFooter className="mt-auto pt-4">
+        <DialogFooter>
           <form onSubmit={handleSendMessage} className="w-full flex items-center gap-2">
             <Input
               value={input}
@@ -255,57 +267,25 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 };
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
-  const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
+  const { toast } = useToast();
+  const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+
+  const [speechStatus, setSpeechStatus] = useState<'idle' | 'speaking' | 'paused'>('idle');
+  const [isTtsSupported, setIsTtsSupported] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  // This effect ensures that when a new recipe is loaded, any ongoing speech from the previous recipe is stopped.
   useEffect(() => {
+    setIsTtsSupported(typeof window !== 'undefined' && 'speechSynthesis' in window);
+    // Cleanup speech synthesis on component unmount
     return () => {
-      if (window.speechSynthesis) {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
     };
-  }, [recipe]);
+  }, []);
 
-  const handleReadAloud = () => {
-    if (!window.speechSynthesis) {
-      return;
-    }
-
-    if (speechState === 'idle') {
-      const textToSpeak = [
-        `Recipe for ${recipe.recipeName}.`,
-        'The ingredients are:', ...recipe.ingredients,
-        'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
-      ].join('. ');
-
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
-      utteranceRef.current = utterance;
-      
-      utterance.volume = 1;
-      utterance.onstart = () => setSpeechState('speaking');
-      utterance.onpause = () => setSpeechState('paused');
-      utterance.onresume = () => setSpeechState('speaking');
-      utterance.onend = () => setSpeechState('idle');
-      utterance.onerror = () => {
-          setSpeechState('idle');
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } else if (speechState === 'paused') {
-      window.speechSynthesis.resume();
-    }
-  };
-
-  const handlePause = () => {
-    if (window.speechSynthesis && speechState === 'speaking') {
-      window.speechSynthesis.pause();
-    }
-  };
-
-
-    const handleCopy = () => {
-        const textToCopy = `
+  const handleCopy = () => {
+    const textToCopy = `
 Recipe for ${recipe.recipeName}
 
 Ingredients:
@@ -317,11 +297,76 @@ ${recipe.instructions.map((step, i) => `${i + 1}. ${step}`).join('\n')}
 ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritionalInformation}` : ''}
     `.trim();
 
-        navigator.clipboard.writeText(textToCopy);
-    };
+    navigator.clipboard.writeText(textToCopy);
+    toast({ title: "Copied to clipboard!" });
+  };
 
-  const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+  const handleReadAloud = () => {
+    if (!isTtsSupported) {
+      toast({
+        variant: "destructive",
+        title: "Unsupported Browser",
+        description: "Your browser does not support text-to-speech.",
+      });
+      return;
+    }
   
+    const synth = window.speechSynthesis;
+  
+    if (speechStatus === 'speaking') {
+      synth.pause();
+      setSpeechStatus('paused');
+    } else if (speechStatus === 'paused') {
+      synth.resume();
+      setSpeechStatus('speaking');
+    } else { // status is 'idle'
+      synth.cancel(); // Clear any previous utterances
+  
+      const textForSpeech = `
+        Recipe for ${recipe.recipeName}.
+        Instructions: ${recipe.instructions.join('. ')}
+      `.trim().replace(/\s+/g, ' ');
+  
+      const newUtterance = new SpeechSynthesisUtterance(textForSpeech);
+      utteranceRef.current = newUtterance;
+  
+      newUtterance.onstart = () => {
+        setSpeechStatus('speaking');
+      };
+  
+      newUtterance.onend = () => {
+        setSpeechStatus('idle');
+        utteranceRef.current = null;
+      };
+  
+      newUtterance.onerror = () => {
+        setSpeechStatus('idle');
+        utteranceRef.current = null;
+        toast({
+          variant: "destructive",
+          title: "Speech Error",
+          description: "An error occurred while trying to read the text.",
+        });
+      };
+  
+      synth.speak(newUtterance);
+    }
+  };
+
+  const getButtonProps = () => {
+    switch (speechStatus) {
+      case 'speaking':
+        return { Icon: PauseCircle, text: 'Pause' };
+      case 'paused':
+        return { Icon: PlayCircle, text: 'Resume' };
+      default: // 'idle'
+        return { Icon: Volume2, text: 'Read Aloud' };
+    }
+  };
+  
+  const { Icon: SpeechIcon, text: speechText } = getButtonProps();
+
+
   return (
     <Card className="shadow-lg animate-in fade-in-0 duration-500 relative">
       {isLoading && (
@@ -370,37 +415,24 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
         </CardFooter>
       )}
       <Separator className="my-4" />
-      <CardFooter className="flex-col items-stretch gap-y-4">
-        <div className="w-full flex justify-between items-center flex-wrap gap-4 pt-2">
-          <div className="flex gap-2 items-center">
+      <CardFooter className="justify-between flex-wrap gap-4">
+        <div className="flex gap-2 items-center">
             <p className="text-sm font-bold">Rate it:</p>
             <Button variant="ghost" size="icon"><ThumbsUp className="w-5 h-5"/></Button>
             <Button variant="ghost" size="icon"><ThumbsDown className="w-5 h-5"/></Button>
-          </div>
-           <div className="flex gap-2 items-center flex-wrap justify-end">
-                {speechState === 'idle' && (
-                    <Button variant="outline" onClick={handleReadAloud}>
-                        <Volume2 /> Read Aloud
-                    </Button>
-                )}
-                {speechState === 'speaking' && (
-                     <Button variant="outline" onClick={handlePause}>
-                        <Pause /> Pause
-                    </Button>
-                )}
-                {speechState === 'paused' && (
-                    <Button variant="outline" onClick={handleReadAloud}>
-                        <Play /> Resume
-                    </Button>
-                )}
-            <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
-              <Sparkles />
-              Ask Chef
-            </Button>
-            <Button variant="outline" onClick={handleCopy}>
-              <Share2 /> Share Recipe
-            </Button>
-          </div>
+        </div>
+        <div className="flex gap-2 items-center">
+          <Button variant="outline" onClick={handleReadAloud} disabled={!isTtsSupported}>
+            <SpeechIcon />
+            {speechText}
+          </Button>
+          <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
+            <Sparkles />
+            Ask Chef
+          </Button>
+          <Button variant="outline" onClick={handleCopy}>
+            <Share2 /> Share Recipe
+          </Button>
         </div>
       </CardFooter>
        <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} />
@@ -426,84 +458,81 @@ export default function CulinaryCanvasPage() {
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState<string>("");
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const isMobile = useIsMobile();
 
+
+  const { toast } = useToast();
 
   useEffect(() => {
     let stream: MediaStream | null = null;
 
     const setupWebcam = async () => {
-        try {
-            // Get device list first to make the switch button appear immediately
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const videoInputs = devices.filter(d => d.kind === 'videoinput');
-            setVideoDevices(videoInputs);
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setVideoDevices(videoInputs);
 
-            if (videoInputs.length === 0) {
-                return; // No camera available
+        let cameraToUse = selectedCamera;
+        if (!cameraToUse || !videoInputs.find(d => d.deviceId === cameraToUse)) {
+            const integratedCamera = videoInputs.find(d => 
+              d.label.toLowerCase().includes('facetime') || 
+              d.label.toLowerCase().includes('built-in') || 
+              d.label.toLowerCase().includes('integrated')
+            );
+            cameraToUse = integratedCamera?.deviceId || videoInputs[0]?.deviceId;
+            if (cameraToUse) {
+                setSelectedCamera(cameraToUse);
             }
-
-            let constraints: MediaStreamConstraints = { video: {} };
-            
-            if (selectedCamera) {
-                // Use the explicitly selected camera if available (e.g., after switching)
-                (constraints.video as MediaTrackConstraints).deviceId = { exact: selectedCamera };
-            } else if (isMobile) {
-                // On mobile, prefer the back camera ('environment')
-                (constraints.video as MediaTrackConstraints).facingMode = { ideal: 'environment' };
-            } else {
-                // For desktop, a generic request is fine
-                constraints.video = true;
-            }
-
+        }
+        
+        if (cameraToUse) {
+            const constraints: MediaStreamConstraints = {
+                video: { deviceId: { exact: cameraToUse } },
+            };
             stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
             if (webcamRef.current) {
                 webcamRef.current.srcObject = stream;
             }
-            
-            // After getting the stream, ensure the 'selectedCamera' state is in sync
-            const currentTrack = stream.getVideoTracks()[0];
-            const currentSettings = currentTrack.getSettings();
-            if (currentSettings.deviceId && currentSettings.deviceId !== selectedCamera) {
-                setSelectedCamera(currentSettings.deviceId);
+        } else if (videoInputs.length > 0) {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            if (webcamRef.current) {
+                webcamRef.current.srcObject = stream;
             }
-
-        } catch (err) {
-            // If our preferred constraints fail (e.g., no back camera), try the default
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                if (webcamRef.current) {
-                    webcamRef.current.srcObject = stream;
-                }
-            } catch (fallbackErr) {
-                setIsWebcamOn(false);
-            }
+        } else {
+             throw new Error("No video input devices found.");
         }
+
+      } catch (err) {
+        console.error("Error accessing webcam:", err);
+        toast({
+          variant: "destructive",
+          title: "Webcam Error",
+          description: "Could not access webcam. Check browser permissions or if a camera is connected.",
+        });
+        setIsWebcamOn(false);
+      }
     };
 
     if (isWebcamOn) {
-        setupWebcam();
+      setupWebcam();
     } else {
-        // When webcam is off, clear devices and selected camera
         setVideoDevices([]);
         setSelectedCamera("");
     }
 
     return () => {
-        // Cleanup: stop any active stream when the component unmounts or dependencies change
-        if (webcamRef.current && webcamRef.current.srcObject) {
-            const currentStream = webcamRef.current.srcObject as MediaStream;
-            currentStream.getTracks().forEach((track) => track.stop());
-            webcamRef.current.srcObject = null;
-        }
+      if (webcamRef.current && webcamRef.current.srcObject) {
+        const currentStream = webcamRef.current.srcObject as MediaStream;
+        currentStream.getTracks().forEach((track) => track.stop());
+        webcamRef.current.srcObject = null;
+      }
     };
-  }, [isWebcamOn, selectedCamera, isMobile]);
+  }, [isWebcamOn, selectedCamera, toast]);
 
   const handleToggleWebcam = () => setIsWebcamOn(prev => !prev);
   
   const handleSwitchCamera = () => {
     if (videoDevices.length < 2) {
+      toast({ title: "No other cameras found." });
       return;
     }
     const currentIndex = videoDevices.findIndex(device => device.deviceId === selectedCamera);
@@ -528,18 +557,25 @@ export default function CulinaryCanvasPage() {
 
   const handleDetectFood = async () => {
     if (!isWebcamOn) {
+        toast({ title: "Webcam is off", description: "Turn on the webcam to detect food." });
         return;
     }
     const photoDataUri = captureFrame();
     if (!photoDataUri) {
+      toast({ variant: "destructive", title: "Error", description: "Could not capture frame. Try again." });
       return;
     }
     setIsLoading("detect");
     try {
       const result = await detectFood({ photoDataUri });
       setIngredients(prev => [...new Set([...prev.split(',').map(i => i.trim()).filter(Boolean), ...result.foodItems])].join(', '));
+      toast({
+        title: "Food Detected!",
+        description: `Added: ${result.foodItems.join(", ")}`,
+      });
     } catch (error) {
-        // Fail silently
+      console.error(error);
+      toast({ variant: "destructive", title: "AI Error", description: "Failed to detect food items." });
     } finally {
       setIsLoading(false);
     }
@@ -548,6 +584,7 @@ export default function CulinaryCanvasPage() {
   const handleSuggestRecipes = async () => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
+      toast({ title: "No Ingredients", description: "Please add some ingredients first." });
       return;
     }
     setIsLoading("suggest");
@@ -560,10 +597,17 @@ export default function CulinaryCanvasPage() {
         preferredCuisines
       });
       
+      if (result.recipes.length === 0) {
+        toast({ title: "No recipes found", description: "Try adding more ingredients."});
+        setIsLoading(false)
+        return;
+      }
+
       setSuggestedRecipes(result.recipes);
 
     } catch (error) {
-        // Fail silently
+      console.error(error);
+      toast({ variant: "destructive", title: "AI Error", description: "Failed to suggest recipes." });
     } finally {
       setIsLoading(false);
     }
@@ -572,37 +616,73 @@ export default function CulinaryCanvasPage() {
   const handleGenerateRecipe = async (recipeName: string) => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
+        toast({ title: "No Ingredients", description: "Please add some ingredients to generate a recipe." });
         return;
     }
 
     setIsLoading("recipe");
-    // Set a placeholder recipe to show the loading state on the card
     setActiveRecipe({
         recipeName: recipeName,
         ingredients: [],
         instructions: [],
     });
 
+    let recipeResult: GenerateRecipeOutput | null = null;
+    let imageResult: { imageUrl?: string } | null = null;
+
     try {
-        // Generate recipe text and image in parallel for efficiency
-        const [recipeResult, imageResult] = await Promise.all([
+        // Run both promises, but don't fail the entire function if one rejects
+        const [recipeSettled, imageSettled] = await Promise.allSettled([
             generateRecipe({
                 recipeName,
                 ingredients: ingredientList,
                 dietaryRestrictions,
             }),
-            generateImage({ recipeName })
+            generateImage({ recipeName }),
         ]);
+        
+        if (recipeSettled.status === 'fulfilled') {
+            recipeResult = recipeSettled.value;
+        } else {
+             // If recipe fails, it's a critical error
+             console.error("Recipe generation failed:", recipeSettled.reason);
+             toast({
+                variant: "destructive",
+                title: "Recipe Generation Failed",
+                description: "Could not generate the recipe. Please try again.",
+            });
+            setActiveRecipe(null);
+            setIsLoading(false);
+            return;
+        }
+
+        if (imageSettled.status === 'fulfilled') {
+            imageResult = imageSettled.value;
+        } else {
+            console.error("Image generation failed:", imageSettled.reason);
+            const reasonStr = (imageSettled.reason || '').toString();
+            if (reasonStr.includes('429') || reasonStr.includes('quota')) {
+              // Silently fail on quota error, don't show toast
+            } else {
+              // Fail silently for other image errors too
+            }
+        }
         
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
-            imageUrl: imageResult.imageUrl,
+            imageUrl: imageResult?.imageUrl,
             imageHint: recipeName.split(' ').slice(0, 2).join(' '),
         };
         
         setActiveRecipe(finalRecipe);
 
     } catch (error) {
+        console.error("An unexpected error occurred in handleGenerateRecipe", error);
+        toast({
+            variant: "destructive",
+            title: "An Unexpected Error Occurred",
+            description: "Please try again.",
+        });
         setActiveRecipe(null);
     } finally {
         setIsLoading(false);
@@ -705,9 +785,7 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                        <ChefHat className="w-8 h-8 text-muted-foreground" />
-                      </div>
+                      <ChefHat className="w-8 h-8 text-muted-foreground flex-shrink-0" />
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
@@ -738,9 +816,7 @@ export default function CulinaryCanvasPage() {
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                        <ChefHat className="w-8 h-8 text-muted-foreground" />
-                      </div>
+                      <ChefHat className="w-8 h-8 text-muted-foreground flex-shrink-0" />
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
@@ -766,5 +842,3 @@ export default function CulinaryCanvasPage() {
     </div>
   );
 }
-
-    
