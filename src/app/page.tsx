@@ -600,10 +600,17 @@ export default function CulinaryCanvasPage() {
           <Alert variant="destructive" className="mb-8">
             <AlertTitle>AI Features Disabled</AlertTitle>
             <AlertDescription>
-              Your <strong>Gemini API key</strong> is not set. Please add{' '}
-              <code>GEMINI_API_KEY=your_key_here</code> to the <code>.env</code>{' '}
-              file and restart the server to use the AI chef. You can get a free
-              key from Google AI Studio.
+              The AI features are disabled because the Gemini API key is not
+              configured.
+              <br />
+              <br />
+              For <strong>local development</strong>, add your key to a{' '}
+              <code>.env</code> file:
+              <code className="my-2 block rounded-md bg-muted p-2 text-sm">
+                GEMINI_API_KEY=your_api_key_here
+              </code>
+              For a <strong>live deployment</strong>, you must set this as an
+              environment variable in your hosting provider's settings.
             </AlertDescription>
           </Alert>
         )}
