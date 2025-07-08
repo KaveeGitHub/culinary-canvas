@@ -13,6 +13,8 @@ import {
   ChevronRight,
   Volume2,
   SwitchCamera,
+  Bot,
+  User,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,17 +24,172 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, textToSpeech, generateImage } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, textToSpeech, generateImage, askChef } from "@/ai";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 
 type ActiveRecipe = GenerateRecipeOutput & { imageUrl?: string; imageHint?: string };
+type ChatMessage = {
+  role: 'user' | 'model';
+  content: string;
+};
 
+
+const FormattedMessage = ({ content }: { content: string }) => {
+  const parts = content.split(/(\*\*.*?\*\*)/g);
+  return (
+    <p className="text-sm whitespace-pre-wrap">
+      {parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={index}>{part.slice(2, -2)}</strong>;
+        }
+        return part;
+      })}
+    </p>
+  );
+};
+
+const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void }) => {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [isChefLoading, setIsChefLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isChefLoading) return;
+
+    const userMessage: ChatMessage = { role: 'user', content: input };
+    setMessages(prev => [...prev, userMessage]);
+    setInput("");
+    setIsChefLoading(true);
+
+    try {
+      const result = await askChef({
+        recipe: recipe,
+        question: input,
+        history: messages,
+      });
+
+      const chefMessage: ChatMessage = { role: 'model', content: result.answer };
+      setMessages(prev => [...prev, chefMessage]);
+
+    } catch (error) {
+      console.error("Ask Chef error:", error);
+      const errorMessage: ChatMessage = { role: 'model', content: "Sorry, I'm having trouble responding right now. Please try again in a moment." };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsChefLoading(false);
+    }
+  };
+
+  // Reset chat when dialog is closed
+  useEffect(() => {
+    if (!isOpen) {
+      setMessages([]);
+      setInput("");
+      setIsChefLoading(false);
+    }
+  }, [isOpen]);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[425px] md:max-w-[600px] h-[90vh] grid grid-rows-[auto_1fr_auto]">
+        <DialogHeader>
+          <DialogTitle className="font-headline text-2xl flex items-center gap-2">
+            <Bot /> Ask the Chef
+          </DialogTitle>
+          <DialogDescription>
+            Have a question about the "{recipe.recipeName}" recipe? Ask away!
+          </DialogDescription>
+        </DialogHeader>
+
+        <ScrollArea className="pr-4 -mr-4 min-h-0">
+          <div className="space-y-4">
+            {messages.map((message, index) => (
+              <div
+                key={index}
+                className={cn(
+                  "flex items-start gap-3",
+                  message.role === 'user' ? 'justify-end' : 'justify-start'
+                )}
+              >
+                {message.role === 'model' && (
+                  <Avatar className="w-8 h-8 bg-primary text-primary-foreground flex-shrink-0">
+                    <AvatarFallback><Bot size={20} /></AvatarFallback>
+                  </Avatar>
+                )}
+                 <div
+                  className={cn(
+                    "p-3 rounded-lg max-w-[80%]",
+                    message.role === 'user'
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {message.role === 'model' ? (
+                    <FormattedMessage content={message.content} />
+                  ) : (
+                    <p className="text-sm">{message.content}</p>
+                  )}
+                </div>
+                {message.role === 'user' && (
+                  <Avatar className="w-8 h-8 bg-muted text-muted-foreground flex-shrink-0">
+                    <AvatarFallback><User size={20} /></AvatarFallback>
+                  </Avatar>
+                )}
+              </div>
+            ))}
+            {isChefLoading && (
+                <div className="flex items-start gap-3 justify-start">
+                    <Avatar className="w-8 h-8 bg-primary text-primary-foreground flex-shrink-0">
+                        <AvatarFallback><Bot size={20} /></AvatarFallback>
+                    </Avatar>
+                    <div className="p-3 rounded-lg bg-muted text-muted-foreground">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                    </div>
+                </div>
+            )}
+             <div ref={messagesEndRef} />
+          </div>
+        </ScrollArea>
+        
+        <DialogFooter>
+          <form onSubmit={handleSendMessage} className="w-full flex items-center gap-2">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="e.g., Can I substitute chicken?"
+              disabled={isChefLoading}
+              className="flex-1"
+            />
+            <Button type="submit" disabled={isChefLoading || !input.trim()}>
+              {isChefLoading ? <Loader2 className="animate-spin" /> : 'Send'}
+            </Button>
+          </form>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
   const { toast } = useToast();
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isChefChatOpen, setIsChefChatOpen] = useState(false);
 
   const handleCopy = () => {
     const textToCopy = `
@@ -141,6 +298,10 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
             {isGeneratingAudio ? <Loader2 className="animate-spin" /> : <Volume2 />}
             Read Aloud
           </Button>
+          <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
+            <Sparkles />
+            Ask Chef
+          </Button>
           <Button variant="outline" onClick={handleCopy}>
             <Share2 /> Share Recipe
           </Button>
@@ -151,6 +312,7 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
               <audio key={audioUrl} controls autoPlay src={audioUrl} className="w-full" />
           </CardFooter>
       )}
+       <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} />
     </Card>
   );
 };
@@ -336,25 +498,26 @@ export default function CulinaryCanvasPage() {
     }
     
     setIsLoading("recipe");
-    setActiveRecipe(current => ({
+    setActiveRecipe({
         recipeName: recipeName,
-        ingredients: current?.ingredients || [],
-        instructions: current?.instructions || [],
-        nutritionalInformation: current?.nutritionalInformation,
-        imageUrl: current?.imageUrl,
-        imageHint: current?.imageHint,
-    }));
+        ingredients: [],
+        instructions: [],
+    });
 
     try {
-        const [recipeResult, imageResult] = await Promise.all([
-            generateRecipe({
-                recipeName,
-                ingredients: ingredientList,
-                dietaryRestrictions,
-            }),
-            generateImage({ recipeName }),
-        ]);
+        const recipePromise = generateRecipe({
+            recipeName,
+            ingredients: ingredientList,
+            dietaryRestrictions,
+        });
 
+        const imagePromise = generateImage({ recipeName });
+
+        const [recipeResult, imageResult] = await Promise.all([
+            recipePromise,
+            imagePromise,
+        ]);
+        
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
             imageUrl: imageResult.imageUrl,
@@ -365,13 +528,25 @@ export default function CulinaryCanvasPage() {
 
     } catch (error) {
         console.error("An unexpected error occurred in handleGenerateRecipe", error);
-        // Silently fail on image generation, but still show the recipe
-        const recipeResult = await generateRecipe({
-            recipeName,
-            ingredients: ingredientList,
-            dietaryRestrictions,
-        });
-        setActiveRecipe(recipeResult);
+        // Do not show a toast here to avoid bothering the user with quota errors.
+        // The UI will just not show an image if generation fails.
+        // We still need to set a recipe, even if the image fails.
+        // Attempt to generate just the recipe again if the Promise.all failed.
+        try {
+            const recipeResult = await generateRecipe({
+                recipeName,
+                ingredients: ingredientList,
+                dietaryRestrictions,
+            });
+            setActiveRecipe(recipeResult); // Set recipe without image
+        } catch (recipeError) {
+             toast({
+                variant: "destructive",
+                title: "Recipe Generation Failed",
+                description: "Could not generate the recipe. Please try again.",
+            });
+            setActiveRecipe(null);
+        }
     } finally {
         setIsLoading(false);
     }
