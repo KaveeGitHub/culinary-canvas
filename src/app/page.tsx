@@ -15,6 +15,7 @@ import {
   SwitchCamera,
   Bot,
   User,
+  Mic,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,69 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
   const [isChefLoading, setIsChefLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const [isRecording, setIsRecording] = useState(false);
+  const [isSpeechSupported, setIsSpeechSupported] = useState(false);
+  const recognitionRef = useRef<any>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setIsSpeechSupported('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  }, []);
+
+  const handleMicClick = () => {
+    if (!isSpeechSupported) {
+        toast({
+            variant: "destructive",
+            title: "Unsupported Browser",
+            description: "Speech recognition is not supported by your browser.",
+        });
+        return;
+    }
+
+    if (isRecording) {
+      recognitionRef.current?.stop();
+      return; 
+    }
+    
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognitionRef.current = new SpeechRecognition();
+    const recognition = recognitionRef.current;
+
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    
+    recognition.start();
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+    };
+
+    recognition.onresult = (event: any) => {
+      const speechResult = event.results[0][0].transcript;
+      setInput(prev => prev ? `${prev} ${speechResult}` : speechResult);
+    };
+
+    recognition.onerror = (event: any) => {
+      let errorMessage = "An unknown error occurred.";
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        errorMessage = "Microphone access denied. Please enable it in browser settings.";
+      } else if (event.error === 'no-speech') {
+        errorMessage = "No speech was detected. Please try again.";
+      }
+      toast({
+        variant: "destructive",
+        title: "Speech Error",
+        description: errorMessage,
+      });
+      setIsRecording(false);
+    };
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
@@ -98,9 +162,13 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
   // Reset chat when dialog is closed
   useEffect(() => {
     if (!isOpen) {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
       setMessages([]);
       setInput("");
       setIsChefLoading(false);
+      setIsRecording(false);
     }
   }, [isOpen]);
 
@@ -171,10 +239,21 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="e.g., Can I substitute chicken?"
+              placeholder={isRecording ? "Listening..." : "e.g., Can I substitute chicken?"}
               disabled={isChefLoading}
               className="flex-1"
             />
+            {isSpeechSupported && (
+              <Button 
+                type="button" 
+                variant={isRecording ? "destructive" : "outline"} 
+                size="icon" 
+                onClick={handleMicClick} 
+                disabled={isChefLoading}
+              >
+                <Mic className={cn(isRecording && "animate-pulse")} />
+              </Button>
+            )}
             <Button type="submit" disabled={isChefLoading || !input.trim()}>
               {isChefLoading ? <Loader2 className="animate-spin" /> : 'Send'}
             </Button>
@@ -493,10 +572,10 @@ export default function CulinaryCanvasPage() {
   const handleGenerateRecipe = async (recipeName: string) => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
-      toast({ title: "No Ingredients", description: "Please add some ingredients to generate a recipe." });
-      return;
+        toast({ title: "No Ingredients", description: "Please add some ingredients to generate a recipe." });
+        return;
     }
-    
+
     setIsLoading("recipe");
     setActiveRecipe({
         recipeName: recipeName,
@@ -504,23 +583,45 @@ export default function CulinaryCanvasPage() {
         instructions: [],
     });
 
+    let recipeResult: GenerateRecipeOutput | null = null;
+    let imageResult: { imageUrl?: string } | null = null;
+
     try {
-        const recipePromise = generateRecipe({
-            recipeName,
-            ingredients: ingredientList,
-            dietaryRestrictions,
-        });
-
-        const imagePromise = generateImage({ recipeName });
-
-        const [recipeResult, imageResult] = await Promise.all([
-            recipePromise,
-            imagePromise,
+        // Run both promises, but don't fail the entire function if one rejects
+        const [recipeSettled, imageSettled] = await Promise.allSettled([
+            generateRecipe({
+                recipeName,
+                ingredients: ingredientList,
+                dietaryRestrictions,
+            }),
+            generateImage({ recipeName }),
         ]);
+        
+        if (recipeSettled.status === 'fulfilled') {
+            recipeResult = recipeSettled.value;
+        } else {
+             // If recipe fails, it's a critical error
+             console.error("Recipe generation failed:", recipeSettled.reason);
+             toast({
+                variant: "destructive",
+                title: "Recipe Generation Failed",
+                description: "Could not generate the recipe. Please try again.",
+            });
+            setActiveRecipe(null);
+            setIsLoading(false);
+            return;
+        }
+
+        if (imageSettled.status === 'fulfilled') {
+            imageResult = imageSettled.value;
+        } else {
+            console.error("Image generation failed:", imageSettled.reason);
+            // Fail silently, don't show toast
+        }
         
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
-            imageUrl: imageResult.imageUrl,
+            imageUrl: imageResult?.imageUrl,
             imageHint: recipeName.split(' ').slice(0, 2).join(' '),
         };
         
@@ -528,29 +629,16 @@ export default function CulinaryCanvasPage() {
 
     } catch (error) {
         console.error("An unexpected error occurred in handleGenerateRecipe", error);
-        // Do not show a toast here to avoid bothering the user with quota errors.
-        // The UI will just not show an image if generation fails.
-        // We still need to set a recipe, even if the image fails.
-        // Attempt to generate just the recipe again if the Promise.all failed.
-        try {
-            const recipeResult = await generateRecipe({
-                recipeName,
-                ingredients: ingredientList,
-                dietaryRestrictions,
-            });
-            setActiveRecipe(recipeResult); // Set recipe without image
-        } catch (recipeError) {
-             toast({
-                variant: "destructive",
-                title: "Recipe Generation Failed",
-                description: "Could not generate the recipe. Please try again.",
-            });
-            setActiveRecipe(null);
-        }
+        toast({
+            variant: "destructive",
+            title: "An Unexpected Error Occurred",
+            description: "Please try again.",
+        });
+        setActiveRecipe(null);
     } finally {
         setIsLoading(false);
     }
-  };
+};
 
 
   return (
