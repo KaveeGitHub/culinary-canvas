@@ -15,6 +15,9 @@ import {
   Bot,
   User,
   Mic,
+  Volume2,
+  Pause,
+  Play,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -24,14 +27,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef, generateImage } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef } from "@/ai";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { isGeminiConfigured } from "@/lib/config";
 
 
 type ActiveRecipe = GenerateRecipeOutput & { imageUrl?: string; imageHint?: string };
@@ -55,12 +55,11 @@ const FormattedMessage = ({ content }: { content: string }) => {
   );
 };
 
-const ChefChatDialog = ({ recipe, isOpen, onOpenChange, isAiConfigured }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void; isAiConfigured: boolean | null }) => {
+const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe; isOpen: boolean; onOpenChange: (open: boolean) => void }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isChefLoading, setIsChefLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { toast } = useToast();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isSpeechSupported, setIsSpeechSupported] = useState(false);
@@ -137,12 +136,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange, isAiConfigured }: { reci
       setMessages(prev => [...prev, chefMessage]);
 
     } catch (error) {
-       console.error("Error asking chef:", error);
-       toast({
-         variant: "destructive",
-         title: "Chef is unavailable",
-         description: "Could not get a response from the chef. Please try again later.",
-       });
+       // Fail silently
     } finally {
       setIsChefLoading(false);
     }
@@ -229,7 +223,7 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange, isAiConfigured }: { reci
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={isRecording ? "Listening..." : "e.g., Can I substitute chicken?"}
-              disabled={isChefLoading || isAiConfigured === false}
+              disabled={isChefLoading}
               className="flex-1"
             />
             {isSpeechSupported && (
@@ -238,12 +232,12 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange, isAiConfigured }: { reci
                 variant={isRecording ? "destructive" : "outline"} 
                 size="icon" 
                 onClick={handleMicClick} 
-                disabled={isChefLoading || isAiConfigured === false}
+                disabled={isChefLoading}
               >
                 <Mic className={cn(isRecording && "animate-pulse")} />
               </Button>
             )}
-            <Button type="submit" disabled={isChefLoading || !input.trim() || isAiConfigured === false}>
+            <Button type="submit" disabled={isChefLoading || !input.trim()}>
               {isChefLoading ? <Loader2 className="animate-spin" /> : 'Send'}
             </Button>
           </form>
@@ -253,7 +247,58 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange, isAiConfigured }: { reci
   );
 };
 
-const RecipeCard = ({ recipe, isLoading, isAiConfigured }: { recipe: ActiveRecipe; isLoading: boolean, isAiConfigured: boolean | null }) => {
+const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
+    const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
+    const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+    // This effect ensures that when a new recipe is loaded, any ongoing speech from the previous recipe is stopped.
+    useEffect(() => {
+        return () => {
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+        };
+    }, [recipe]);
+
+    const handleReadAloud = () => {
+        if (!window.speechSynthesis || speechState !== 'idle') {
+            return;
+        }
+
+        const textToSpeak = [
+            `Recipe for ${recipe.recipeName}.`,
+            'The ingredients are:', ...recipe.ingredients,
+            'The instructions are:', ...recipe.instructions.map((step, i) => `Step ${i + 1}: ${step}`)
+        ].join('. ');
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        utteranceRef.current = utterance;
+        
+        utterance.volume = 1; // Set volume to maximum
+
+        utterance.onstart = () => setSpeechState('speaking');
+        utterance.onpause = () => setSpeechState('paused');
+        utterance.onresume = () => setSpeechState('speaking');
+        utterance.onend = () => setSpeechState('idle');
+        utterance.onerror = (e) => {
+            setSpeechState('idle');
+        };
+
+        window.speechSynthesis.speak(utterance);
+    };
+
+    const handlePause = () => {
+        if (window.speechSynthesis && speechState === 'speaking') {
+            window.speechSynthesis.pause();
+        }
+    };
+
+    const handleResume = () => {
+        if (window.speechSynthesis && speechState === 'paused') {
+            window.speechSynthesis.resume();
+        }
+    };
+
     const handleCopy = () => {
         const textToCopy = `
 Recipe for ${recipe.recipeName}
@@ -328,7 +373,22 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
             <Button variant="ghost" size="icon"><ThumbsDown className="w-5 h-5"/></Button>
           </div>
            <div className="flex gap-2 items-center flex-wrap justify-end">
-            <Button variant="outline" onClick={() => setIsChefChatOpen(true)} disabled={isAiConfigured === false}>
+                 {speechState === 'idle' && (
+                    <Button variant="outline" onClick={handleReadAloud}>
+                        <Volume2 /> Read Aloud
+                    </Button>
+                )}
+                {speechState === 'speaking' && (
+                     <Button variant="outline" onClick={handlePause}>
+                        <Pause /> Pause
+                    </Button>
+                )}
+                {speechState === 'paused' && (
+                    <Button variant="outline" onClick={handleResume}>
+                        <Play /> Resume
+                    </Button>
+                )}
+            <Button variant="outline" onClick={() => setIsChefChatOpen(true)}>
               <Sparkles />
               Ask Chef
             </Button>
@@ -338,7 +398,7 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
           </div>
         </div>
       </CardFooter>
-       <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} isAiConfigured={isAiConfigured} />
+       <ChefChatDialog recipe={recipe} isOpen={isChefChatOpen} onOpenChange={setIsChefChatOpen} />
     </Card>
   );
 };
@@ -361,88 +421,81 @@ export default function CulinaryCanvasPage() {
   const [isWebcamOn, setIsWebcamOn] = useState(false);
   const [selectedCamera, setSelectedCamera] = useState<string>("");
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const isMobile = useIsMobile();
+
+
   const { toast } = useToast();
-  const [isAiConfigured, setIsAiConfigured] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const checkAiConfig = async () => {
-      const configured = await isGeminiConfigured();
-      setIsAiConfigured(configured);
-    };
-    checkAiConfig();
-  }, []);
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-
     const setupWebcam = async () => {
-        try {
-            // Get device list first to make the switch button appear immediately
-            const devices = await navigator.mediaDevices.enumerateDevices();
-            const videoInputs = devices.filter(d => d.kind === 'videoinput');
-            setVideoDevices(videoInputs);
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(d => d.kind === 'videoinput');
+        setVideoDevices(videoInputs);
 
-            if (videoInputs.length === 0) {
-                return; // No camera available
-            }
+        let stream: MediaStream | null = null;
+        let constraints: MediaStreamConstraints;
 
-            let constraints: MediaStreamConstraints = { video: {} };
-            
-            if (selectedCamera) {
-                // Use the explicitly selected camera if available (e.g., after switching)
-                (constraints.video as MediaTrackConstraints).deviceId = { exact: selectedCamera };
-            } else if (isMobile) {
-                // On mobile, prefer the back camera ('environment')
-                (constraints.video as MediaTrackConstraints).facingMode = { ideal: 'environment' };
-            } else {
-                // For desktop, a generic request is fine
-                constraints.video = true;
-            }
-
-            stream = await navigator.mediaDevices.getUserMedia(constraints);
-            
-            if (webcamRef.current) {
-                webcamRef.current.srcObject = stream;
-            }
-            
-            // After getting the stream, ensure the 'selectedCamera' state is in sync
-            const currentTrack = stream.getVideoTracks()[0];
-            const currentSettings = currentTrack.getSettings();
-            if (currentSettings.deviceId && currentSettings.deviceId !== selectedCamera) {
-                setSelectedCamera(currentSettings.deviceId);
-            }
-
-        } catch (err) {
-            // If our preferred constraints fail (e.g., no back camera), try the default
+        if (selectedCamera) {
+          constraints = { video: { deviceId: { exact: selectedCamera } } };
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } else {
+          const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+          if (isMobile) {
+            // On mobile, first try for the back camera.
             try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                if (webcamRef.current) {
-                    webcamRef.current.srcObject = stream;
+              constraints = { video: { facingMode: 'environment' } };
+              stream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (e) {
+              // If back camera fails, fall back to any camera.
+              constraints = { video: true };
+              stream = await navigator.mediaDevices.getUserMedia(constraints);
+            }
+          } else {
+            // On desktop, just get the default camera (usually front).
+            constraints = { video: true };
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+          }
+        }
+        
+        if (webcamRef.current) {
+            webcamRef.current.srcObject = stream;
+        }
+
+        if (!selectedCamera && stream) {
+            const currentTrack = stream.getVideoTracks()[0];
+            if (currentTrack) {
+                const settings = currentTrack.getSettings();
+                if (settings.deviceId) {
+                    setSelectedCamera(settings.deviceId);
                 }
-            } catch (fallbackErr) {
-                setIsWebcamOn(false);
             }
         }
+
+      } catch (err) {
+        setIsWebcamOn(false);
+      }
     };
 
     if (isWebcamOn) {
-        setupWebcam();
+      setupWebcam();
     } else {
-        // When webcam is off, clear devices and selected camera
-        setVideoDevices([]);
-        setSelectedCamera("");
+      if (webcamRef.current && webcamRef.current.srcObject) {
+        const currentStream = webcamRef.current.srcObject as MediaStream;
+        currentStream.getTracks().forEach((track) => track.stop());
+        webcamRef.current.srcObject = null;
+      }
+      setVideoDevices([]);
+      setSelectedCamera("");
     }
 
     return () => {
-        // Cleanup: stop any active stream when the component unmounts or dependencies change
-        if (webcamRef.current && webcamRef.current.srcObject) {
-            const currentStream = webcamRef.current.srcObject as MediaStream;
-            currentStream.getTracks().forEach((track) => track.stop());
-            webcamRef.current.srcObject = null;
-        }
+      if (webcamRef.current && webcamRef.current.srcObject) {
+        const currentStream = webcamRef.current.srcObject as MediaStream;
+        currentStream.getTracks().forEach((track) => track.stop());
+        webcamRef.current.srcObject = null;
+      }
     };
-  }, [isWebcamOn, selectedCamera, isMobile]);
+  }, [isWebcamOn, selectedCamera]);
 
   const handleToggleWebcam = () => setIsWebcamOn(prev => !prev);
   
@@ -472,20 +525,10 @@ export default function CulinaryCanvasPage() {
 
   const handleDetectFood = async () => {
     if (!isWebcamOn) {
-        toast({
-          variant: "destructive",
-          title: "Webcam Off",
-          description: "Please turn on your webcam to detect ingredients.",
-        });
         return;
     }
     const photoDataUri = captureFrame();
     if (!photoDataUri) {
-      toast({
-        variant: "destructive",
-        title: "Capture Failed",
-        description: "Could not capture an image from the webcam.",
-      });
       return;
     }
     setIsLoading("detect");
@@ -493,12 +536,7 @@ export default function CulinaryCanvasPage() {
       const result = await detectFood({ photoDataUri });
       setIngredients(prev => [...new Set([...prev.split(',').map(i => i.trim()).filter(Boolean), ...result.foodItems])].join(', '));
     } catch (error) {
-        console.error("Error detecting food:", error);
-        toast({
-          variant: "destructive",
-          title: "Detection Failed",
-          description: "Could not detect ingredients from the image. Please try again.",
-        });
+        // Fail silently
     } finally {
       setIsLoading(false);
     }
@@ -507,10 +545,6 @@ export default function CulinaryCanvasPage() {
   const handleSuggestRecipes = async () => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
-      toast({
-        title: "No Ingredients",
-        description: "Please enter some ingredients to get recipe suggestions.",
-      });
       return;
     }
     setIsLoading("suggest");
@@ -523,15 +557,15 @@ export default function CulinaryCanvasPage() {
         preferredCuisines
       });
       
+      if (result.recipes.length === 0) {
+        setIsLoading(false)
+        return;
+      }
+
       setSuggestedRecipes(result.recipes);
 
     } catch (error) {
-        console.error("Error suggesting recipes:", error);
-        toast({
-          variant: "destructive",
-          title: "Suggestion Failed",
-          description: "Could not get recipe suggestions. Please check your ingredients and try again.",
-        });
+        // Fail silently
     } finally {
       setIsLoading(false);
     }
@@ -540,47 +574,36 @@ export default function CulinaryCanvasPage() {
   const handleGenerateRecipe = async (recipeName: string) => {
     const ingredientList = ingredients.split(',').map(i => i.trim()).filter(Boolean);
     if (ingredientList.length === 0) {
-        toast({
-          title: "No Ingredients",
-          description: "Please enter some ingredients before generating a recipe.",
-        });
         return;
     }
 
+    const selectedSuggestion = suggestedRecipes.find(r => r.recipeName === recipeName);
+
     setIsLoading("recipe");
-    // Set a placeholder recipe to show the loading state on the card
     setActiveRecipe({
         recipeName: recipeName,
         ingredients: [],
         instructions: [],
+        imageUrl: selectedSuggestion?.imageUrl,
+        imageHint: recipeName.split(' ').slice(0, 2).join(' '),
     });
 
     try {
-        // Generate recipe text and image in parallel for efficiency
-        const [recipeResult, imageResult] = await Promise.all([
-            generateRecipe({
-                recipeName,
-                ingredients: ingredientList,
-                dietaryRestrictions,
-            }),
-            generateImage({ recipeName })
-        ]);
+        const recipeResult = await generateRecipe({
+            recipeName,
+            ingredients: ingredientList,
+            dietaryRestrictions,
+        });
         
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
-            imageUrl: imageResult.imageUrl,
+            imageUrl: selectedSuggestion?.imageUrl,
             imageHint: recipeName.split(' ').slice(0, 2).join(' '),
         };
         
         setActiveRecipe(finalRecipe);
 
     } catch (error) {
-        console.error("Error generating recipe:", error);
-        toast({
-          variant: "destructive",
-          title: "Recipe Generation Failed",
-          description: "The chef couldn't create the recipe. Please try another one.",
-        });
         setActiveRecipe(null);
     } finally {
         setIsLoading(false);
@@ -595,25 +618,6 @@ export default function CulinaryCanvasPage() {
           <h1 className="text-5xl md:text-6xl font-headline text-primary">Culinary Canvas</h1>
           <p className="text-muted-foreground mt-2 text-lg">Your AI-powered sous-chef</p>
         </header>
-
-        {isAiConfigured === false && (
-          <Alert variant="destructive" className="mb-8">
-            <AlertTitle>AI Features Disabled</AlertTitle>
-            <AlertDescription>
-              The AI features are disabled because the Gemini API key is not
-              configured.
-              <br />
-              <br />
-              For <strong>local development</strong>, add your key to a{' '}
-              <code>.env</code> file:
-              <code className="my-2 block rounded-md bg-muted p-2 text-sm">
-                GEMINI_API_KEY=your_api_key_here
-              </code>
-              For a <strong>live deployment</strong>, you must set this as an
-              environment variable in your hosting provider's settings.
-            </AlertDescription>
-          </Alert>
-        )}
         
         <Card className="mb-8 shadow-lg border-2 border-primary/20">
           <CardHeader>
@@ -636,7 +640,7 @@ export default function CulinaryCanvasPage() {
                 <Camera />
                 {isWebcamOn ? 'Turn Off Webcam' : 'Turn On Webcam'}
               </Button>
-              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn || isAiConfigured === false} className="bg-primary hover:bg-primary/90 text-primary-foreground">
+              <Button onClick={handleDetectFood} disabled={isLoading !== false || !isWebcamOn} className="bg-primary hover:bg-primary/90 text-primary-foreground">
                 <Sparkles />
                 Detect Ingredients
               </Button>
@@ -672,7 +676,7 @@ export default function CulinaryCanvasPage() {
               </div>
           </CardContent>
           <CardFooter className="flex flex-wrap justify-center gap-4 pt-6">
-            <Button onClick={handleSuggestRecipes} disabled={isLoading !== false || isAiConfigured === false} size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            <Button onClick={handleSuggestRecipes} disabled={isLoading !== false} size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {isLoading === "suggest" ? <Loader2 className="animate-spin" /> : <ChefHat />}
               Suggest Recipes
             </Button>
@@ -697,14 +701,22 @@ export default function CulinaryCanvasPage() {
                 {suggestedRecipes.map((recipe, index) => (
                   <button 
                     key={index} 
-                    disabled={isLoading !== false || isAiConfigured === false}
+                    disabled={isLoading !== false}
                     className="flex items-center justify-between p-4 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed w-full text-left"
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                        <ChefHat className="w-8 h-8 text-muted-foreground" />
-                      </div>
+                      {recipe.imageUrl ? (
+                        <img
+                          src={recipe.imageUrl}
+                          alt={recipe.recipeName}
+                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                          <ChefHat className="w-8 h-8 text-muted-foreground" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
@@ -718,7 +730,7 @@ export default function CulinaryCanvasPage() {
           )}
 
           {activeRecipe && (
-             <RecipeCard recipe={activeRecipe} isLoading={isLoading === 'recipe'} isAiConfigured={isAiConfigured} />
+             <RecipeCard recipe={activeRecipe} isLoading={isLoading === 'recipe'} />
           )}
           
           {suggestedRecipes.length > 0 && activeRecipe && !isLoading && (
@@ -730,14 +742,22 @@ export default function CulinaryCanvasPage() {
                 {suggestedRecipes.filter(r => r.recipeName !== activeRecipe.recipeName).map((recipe, index) => (
                   <button 
                     key={index} 
-                    disabled={isLoading !== false || isAiConfigured === false}
+                    disabled={isLoading !== false}
                     className="flex items-center justify-between p-4 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer group disabled:opacity-50 disabled:cursor-not-allowed w-full text-left"
                     onClick={() => handleGenerateRecipe(recipe.recipeName)}
                   >
                     <div className="flex items-center gap-4 flex-1">
-                      <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                        <ChefHat className="w-8 h-8 text-muted-foreground" />
-                      </div>
+                       {recipe.imageUrl ? (
+                        <img
+                          src={recipe.imageUrl}
+                          alt={recipe.recipeName}
+                          className="w-16 h-16 rounded-lg object-cover shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                          <ChefHat className="w-8 h-8 text-muted-foreground" />
+                        </div>
+                      )}
                       <div className="flex-1">
                         <h3 className="font-bold font-headline text-lg group-hover:text-primary">{recipe.recipeName}</h3>
                         <p className="text-sm text-muted-foreground">{recipe.description}</p>
