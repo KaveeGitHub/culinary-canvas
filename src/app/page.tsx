@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
-import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, generateImage, askChef } from "@/ai";
+import { detectFood, GenerateRecipeOutput, generateRecipe, suggestRecipes, RecipeSuggestion, askChef } from "@/ai";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -248,8 +248,6 @@ const ChefChatDialog = ({ recipe, isOpen, onOpenChange }: { recipe: ActiveRecipe
 };
 
 const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: boolean }) => {
-    const { toast } = useToast();
-    const [isChefChatOpen, setIsChefChatOpen] = useState(false);
     const [speechState, setSpeechState] = useState<'idle' | 'speaking' | 'paused'>('idle');
     const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -275,6 +273,8 @@ const RecipeCard = ({ recipe, isLoading }: { recipe: ActiveRecipe; isLoading: bo
 
         const utterance = new SpeechSynthesisUtterance(textToSpeak);
         utteranceRef.current = utterance;
+        
+        utterance.volume = 1; // Set volume to maximum
 
         utterance.onstart = () => setSpeechState('speaking');
         utterance.onpause = () => setSpeechState('paused');
@@ -315,6 +315,8 @@ ${recipe.nutritionalInformation ? `Nutritional Information:\n${recipe.nutritiona
         navigator.clipboard.writeText(textToCopy);
     };
 
+  const [isChefChatOpen, setIsChefChatOpen] = useState(false);
+  
   return (
     <Card className="shadow-lg animate-in fade-in-0 duration-500 relative">
       {isLoading && (
@@ -563,44 +565,27 @@ export default function CulinaryCanvasPage() {
         return;
     }
 
+    const selectedSuggestion = suggestedRecipes.find(r => r.recipeName === recipeName);
+
     setIsLoading("recipe");
     setActiveRecipe({
         recipeName: recipeName,
         ingredients: [],
         instructions: [],
+        imageUrl: selectedSuggestion?.imageUrl,
+        imageHint: recipeName.split(' ').slice(0, 2).join(' '),
     });
 
-    let recipeResult: GenerateRecipeOutput | null = null;
-    let imageResult: { imageUrl?: string } | null = null;
-
     try {
-        // Run both promises, but don't fail the entire function if one rejects
-        const [recipeSettled, imageSettled] = await Promise.allSettled([
-            generateRecipe({
-                recipeName,
-                ingredients: ingredientList,
-                dietaryRestrictions,
-            }),
-            generateImage({ recipeName }),
-        ]);
-        
-        if (recipeSettled.status === 'fulfilled') {
-            recipeResult = recipeSettled.value;
-        } else {
-             setActiveRecipe(null);
-             setIsLoading(false);
-             return;
-        }
-
-        if (imageSettled.status === 'fulfilled') {
-            imageResult = imageSettled.value;
-        } else {
-            // Fail silently for image generation errors
-        }
+        const recipeResult = await generateRecipe({
+            recipeName,
+            ingredients: ingredientList,
+            dietaryRestrictions,
+        });
         
         const finalRecipe: ActiveRecipe = {
             ...recipeResult,
-            imageUrl: imageResult?.imageUrl,
+            imageUrl: selectedSuggestion?.imageUrl,
             imageHint: recipeName.split(' ').slice(0, 2).join(' '),
         };
         
